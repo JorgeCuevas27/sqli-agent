@@ -1,0 +1,7 @@
+services:
+  dvwa:
+    image: vulnerables/web-dvwa:latest
+    container_name: sqli-dvwa
+    ports:
+      - "8080:80"
+    restart: unless-stopped
