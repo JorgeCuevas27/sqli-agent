@@ -17,6 +17,7 @@ class Analyst(Agent):
             "payload_sent": payload,
             "http_status": response.http_status,
             "db_error_detected": response.db_error,
+            "waf_blocked": response.blocked,
             "rows_parsed_from_page": response.rows,
             "html_excerpt": response.raw_html[:2000],
         }

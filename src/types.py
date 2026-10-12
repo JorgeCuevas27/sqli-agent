@@ -15,6 +15,7 @@ class SqliResponse:
     raw_html: str
     rows: list[dict[str, str]] = field(default_factory=list)
     db_error: bool = False
+    blocked: bool = False  # the request was stopped by a WAF (e.g. ModSecurity) before reaching the DB
 
 
 @dataclass

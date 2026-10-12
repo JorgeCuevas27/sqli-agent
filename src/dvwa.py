@@ -20,6 +20,11 @@ _SQL_ERROR_MARKERS = (
     "warning: mysqli",
 )
 
+# When DVWA sits behind a WAF (ModSecurity + OWASP CRS) a blocked request never reaches the
+# database: the proxy answers with one of these statuses, often with a recognisable body.
+_BLOCK_STATUS = (403, 406, 501)
+_WAF_MARKERS = ("mod_security", "modsecurity", "not acceptable", "access denied")
+
 
 class DVWAClient:
     def __init__(
@@ -67,13 +72,15 @@ class DVWAClient:
     def run_sqli(self, payload: str, level: str) -> SqliResponse:
         level = level.lower()
         path = "/vulnerabilities/sqli/"
+        blocked_before = False
         if level == "high":
             # The id is read from a session variable set on a separate page, then shown on GET.
-            self.session.post(
+            post = self.session.post(
                 f"{self.base}{path}session-input.php",
                 data={"id": payload, "Submit": "Submit"},
                 timeout=30,
             )
+            blocked_before = self._is_blocked(post)
             resp = self.session.get(f"{self.base}{path}", timeout=30)
         elif level == "medium":
             resp = self.session.post(
@@ -83,13 +90,24 @@ class DVWAClient:
             resp = self.session.get(
                 f"{self.base}{path}", params={"id": payload, "Submit": "Submit"}, timeout=30
             )
-        return self._parse(payload, resp)
+        result = self._parse(payload, resp)
+        if blocked_before:  # the WAF stopped the session-input POST that carries the payload
+            result.blocked = True
+        return result
+
+    @staticmethod
+    def _is_blocked(resp: requests.Response) -> bool:
+        if resp.status_code in _BLOCK_STATUS:
+            return True
+        low = resp.text.lower()
+        return any(marker in low for marker in _WAF_MARKERS)
 
     @staticmethod
     def _parse(payload: str, resp: requests.Response) -> SqliResponse:
         html = resp.text
         low = html.lower()
         db_error = any(marker in low for marker in _SQL_ERROR_MARKERS)
+        blocked = resp.status_code in _BLOCK_STATUS or any(m in low for m in _WAF_MARKERS)
 
         rows: list[dict[str, str]] = []
         for pre in BeautifulSoup(html, "html.parser").find_all("pre"):
@@ -113,4 +131,5 @@ class DVWAClient:
             raw_html=html,
             rows=rows,
             db_error=db_error,
+            blocked=blocked,
         )
