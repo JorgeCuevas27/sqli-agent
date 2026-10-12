@@ -102,8 +102,9 @@ paper artifact.
 
 - [x] WAF harness (ModSecurity + CRS in front of DVWA) — confirmed CRS blocks naive SQLi (403).
 - [x] Evasion grammar + WAF profile (`src/evasion.py`) + unit tests.
+- [x] EvasionEngine wired into the orchestrator (content/surface decoupling) + flow tests.
+- [x] Naive-rule WAF proxy (middle tier, `waf/`) + bypass tests.
 - [ ] `Target` interface + refactor DVWA into `DVWATarget`.
-- [ ] Discovery FSM wired into Planner/Analyst.
-- [ ] Naive-rule WAF proxy (middle tier).
+- [ ] Discovery FSM wired into Planner/Analyst (remove remaining DVWA overfit).
 - [ ] Experiment runner + CSV.
 - [ ] SQLi-Labs + generic HTTP targets.

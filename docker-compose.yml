@@ -1,9 +1,9 @@
-# DVWA lab, served two ways so the study can compare WAF off vs on against the SAME target:
-#   - baseline : DVWA direct              -> DVWA_URL=http://localhost
-#   - WAF      : DVWA behind ModSecurity  -> DVWA_URL=http://localhost:8081
-#                (ModSecurity v3 + OWASP Core Rule Set, the industry-standard open-source WAF)
+# DVWA lab, served three ways so the study can compare WAF tiers against the SAME target:
+#   - baseline : DVWA direct                 -> DVWA_URL=http://localhost
+#   - naive    : DVWA behind our regex WAF    -> DVWA_URL=http://localhost:8082  (bypassable tier)
+#   - crs      : DVWA behind ModSecurity+CRS  -> DVWA_URL=http://localhost:8081  (hard tier)
 #
-# Bring up:   docker-compose up -d        (or: docker compose up -d)
+# Bring up:   docker-compose up -d --build   (or: docker compose up -d --build)
 # First time: open http://localhost (admin/password) -> "Create / Reset Database"
 version: "3.8"
 
@@ -29,5 +29,17 @@ services:
       ANOMALY_INBOUND: "5"
       ANOMALY_OUTBOUND: "4"
     ports:
-      - "8081:8080"        # DVWA behind the WAF
+      - "8081:8080"        # DVWA behind the CRS WAF
+    restart: unless-stopped
+
+  naive-waf:
+    build: ./waf
+    container_name: sqli-naive-waf
+    depends_on:
+      - dvwa
+    environment:
+      BACKEND: "http://dvwa:80"
+      PORT: "8082"
+    ports:
+      - "8082:8082"        # DVWA behind our naive regex WAF (bypassable tier)
     restart: unless-stopped
