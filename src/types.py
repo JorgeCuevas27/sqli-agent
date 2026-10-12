@@ -36,3 +36,4 @@ class RunResult:
     extracted: list[dict[str, str]]
     strategy: str = ""
     attempts: list[Attempt] = field(default_factory=list)
+    waf_profile: dict[str, Any] = field(default_factory=dict)  # what the run learned about the WAF
