@@ -3,8 +3,10 @@
 #   - WAF      : DVWA behind ModSecurity  -> DVWA_URL=http://localhost:8081
 #                (ModSecurity v3 + OWASP Core Rule Set, the industry-standard open-source WAF)
 #
-# Bring up:   docker compose up -d
+# Bring up:   docker-compose up -d        (or: docker compose up -d)
 # First time: open http://localhost (admin/password) -> "Create / Reset Database"
+version: "3.8"
+
 services:
   dvwa:
     image: vulnerables/web-dvwa:latest
@@ -12,14 +14,14 @@ services:
     ports:
       - "80:80"            # baseline, no WAF
     restart: unless-stopped
-    networks: [sqlinet]
 
   waf:
     image: owasp/modsecurity-crs:apache
     container_name: sqli-waf
-    depends_on: [dvwa]
+    depends_on:
+      - dvwa
     environment:
-      BACKEND: "http://dvwa:80"      # proxy upstream = the DVWA container
+      BACKEND: "http://dvwa:80"      # proxy upstream = the DVWA container (resolved by service name)
       PORT: "8080"                   # port ModSecurity listens on inside the container
       SERVER_NAME: "localhost"
       MODSEC_RULE_ENGINE: "On"       # On = block; DetectionOnly = log but allow
@@ -29,8 +31,3 @@ services:
     ports:
       - "8081:8080"        # DVWA behind the WAF
     restart: unless-stopped
-    networks: [sqlinet]
-
-networks:
-  sqlinet:
-    driver: bridge
