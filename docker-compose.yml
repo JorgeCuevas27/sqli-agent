@@ -1,7 +1,36 @@
+# DVWA lab, served two ways so the study can compare WAF off vs on against the SAME target:
+#   - baseline : DVWA direct              -> DVWA_URL=http://localhost
+#   - WAF      : DVWA behind ModSecurity  -> DVWA_URL=http://localhost:8081
+#                (ModSecurity v3 + OWASP Core Rule Set, the industry-standard open-source WAF)
+#
+# Bring up:   docker compose up -d
+# First time: open http://localhost (admin/password) -> "Create / Reset Database"
 services:
   dvwa:
     image: vulnerables/web-dvwa:latest
     container_name: sqli-dvwa
     ports:
-      - "8080:80"
+      - "80:80"            # baseline, no WAF
     restart: unless-stopped
+    networks: [sqlinet]
+
+  waf:
+    image: owasp/modsecurity-crs:apache
+    container_name: sqli-waf
+    depends_on: [dvwa]
+    environment:
+      BACKEND: "http://dvwa:80"      # proxy upstream = the DVWA container
+      PORT: "8080"                   # port ModSecurity listens on inside the container
+      SERVER_NAME: "localhost"
+      MODSEC_RULE_ENGINE: "On"       # On = block; DetectionOnly = log but allow
+      PARANOIA: "1"                  # CRS paranoia level 1..4 (raise to make evasion harder)
+      ANOMALY_INBOUND: "5"
+      ANOMALY_OUTBOUND: "4"
+    ports:
+      - "8081:8080"        # DVWA behind the WAF
+    restart: unless-stopped
+    networks: [sqlinet]
+
+networks:
+  sqlinet:
+    driver: bridge
