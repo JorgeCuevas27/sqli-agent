@@ -178,7 +178,8 @@ class WafProfile:
 
     def summary(self) -> dict:
         return {
-            "locked_pipeline": list(self.locked_pipeline) if self.locked_pipeline else None,
+            # the plain pipeline () is a valid locked state, so test for None explicitly
+            "locked_pipeline": list(self.locked_pipeline) if self.locked_pipeline is not None else None,
             "blocked_count": len(self.blocked_pipelines),
             "passed_count": len(self.passed_pipelines),
             "payloads_tried": len(self.tried_payloads),
