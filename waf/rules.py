@@ -12,17 +12,13 @@ from __future__ import annotations
 import re
 
 # Each rule targets a common SQLi signature. Kept deliberately naive.
+# Firmas basadas en espacios (evadibles con comentarios /**/ o UNION ALL). A diferencia del CRS,
+# aquí NO se bloquean identificadores como information_schema (no hay disfraz de superficie que los
+# evada), para que el tier naive sea realmente bypasseable de punta a punta por la gramática.
 _PATTERNS = (
     r"union\s+select",
     r"\bor\s+\d+\s*=\s*\d+",
     r"\band\s+\d+\s*=\s*\d+",
-    r"information_schema",
-    r"\bsleep\s*\(",
-    r"\bbenchmark\s*\(",
-    r"\bextractvalue\s*\(",
-    r"\bupdatexml\s*\(",
-    r"\bload_file\s*\(",
-    r"into\s+outfile",
 )
 RULES = tuple(re.compile(p, re.IGNORECASE) for p in _PATTERNS)
 

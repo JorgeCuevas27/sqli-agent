@@ -17,7 +17,7 @@ class Config:
     ollama_model: str = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 
     # Run limits
-    max_steps: int = int(os.getenv("MAX_STEPS", "25"))
+    max_steps: int = int(os.getenv("MAX_STEPS", "80"))  # el descubrimiento + evasión de WAF usa varios sondeos
     timeout_seconds: int = int(os.getenv("TIMEOUT_SECONDS", "600"))  # cap per run; human baseline ~10 min
 
 
