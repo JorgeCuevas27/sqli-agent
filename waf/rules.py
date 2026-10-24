@@ -3,8 +3,8 @@
 Design note: these are plain, signature-style regexes. Unlike ModSecurity + OWASP CRS, this WAF
 does NOT normalise comments and does NOT tokenise SQL semantically (no libinjection). That makes
 it realistic for the many hand-rolled "regex WAFs" in the wild, and — crucially for the experiment
-— bypassable by the evasion grammar: inserting `/**/` between keywords or using `UNION ALL` breaks
-the `\s+`-based signatures, while case alone does not (the rules are case-insensitive).
+— bypassable by the evasion grammar: inserting comments between keywords or using UNION ALL breaks
+the whitespace-based signatures, while case alone does not (the rules are case-insensitive).
 
 This module is pure (no Flask/requests) so it can be unit-tested and imported by the proxy."""
 from __future__ import annotations

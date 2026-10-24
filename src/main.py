@@ -29,6 +29,7 @@ def _result_to_dict(result: RunResult) -> dict:
         "steps_used": result.steps_used,
         "strategy": result.strategy,
         "waf_profile": result.waf_profile,
+        "discovery_trace": result.trace,
         "extracted": result.extracted,
         "attempts": [
             {

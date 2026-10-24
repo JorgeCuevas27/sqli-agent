@@ -1,25 +1,21 @@
-"""Analyst: inspects the DVWA response and decides whether the injection worked, whether
-credentials were dumped, and what the Executor should do next."""
+"""Analyst: dada una tabla y sus columnas descubiertas, decide cuáles son las credenciales."""
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Optional
 
 from .base import Agent
 from ..llm import parse_json
-from ..types import SqliResponse
 
 
 class Analyst(Agent):
-    def analyze(self, level: str, payload: str, response: SqliResponse) -> dict[str, Any]:
-        request = {
-            "dvwa_security_level": level,
-            "payload_sent": payload,
-            "http_status": response.http_status,
-            "db_error_detected": response.db_error,
-            "waf_blocked": response.blocked,
-            "rows_parsed_from_page": response.rows,
-            "html_excerpt": response.raw_html[:2000],
-        }
+    def pick_credentials(self, table: str, columns: list[str]) -> Optional[tuple[str, str]]:
+        """Devuelve (columna_usuario, columna_contraseña) elegidas por el LLM, o None."""
+        request = {"table": table, "columns": columns}
         raw = self.llm.chat(self.system, json.dumps(request), json_mode=True, temperature=0.1)
-        return parse_json(raw)
+        data = parse_json(raw)
+        user_col = str(data.get("username_column", "")).strip()
+        pass_col = str(data.get("password_column", "")).strip()
+        if user_col and pass_col and user_col != pass_col:
+            return user_col, pass_col
+        return None

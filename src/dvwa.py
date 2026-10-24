@@ -18,6 +18,13 @@ _SQL_ERROR_MARKERS = (
     "you have an error in your sql",
     "sql syntax",
     "warning: mysqli",
+    "unknown column",
+    "in 'order clause'",
+    "different number of columns",
+    "fetch_array()",
+    "mysqli_fetch",
+    "supplied argument is not a valid mysql",
+    "sqlstate",
 )
 
 # When DVWA sits behind a WAF (ModSecurity + OWASP CRS) a blocked request never reaches the

