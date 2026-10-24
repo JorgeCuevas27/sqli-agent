@@ -45,6 +45,17 @@ class FakeTarget:
         return SqliResponse(payload, 200, "<pre></pre>", rows or [], db_error, False)
 
     def run_sqli(self, payload: str, level: str) -> SqliResponse:
+        p = payload.strip()
+        if p == "1":                               # baseline (sin inyección)
+            return self._resp(payload, [{"first_name": "admin", "surname": "admin"}])
+        if p == "1'":                              # error-based: la comilla rompe la consulta
+            return self._resp(payload, db_error=True)
+        if "AND 1=1" in payload:                   # boolean verdadero
+            return self._resp(payload, [{"first_name": "admin", "surname": "admin"}])
+        if "AND 1=2" in payload:                   # boolean falso
+            return self._resp(payload)
+        if "@@version" in payload:                 # fingerprint del DBMS
+            return self._resp(payload, [{"first_name": "10.5.19-MariaDB", "surname": "2"}])
         m = re.search(r"ORDER BY (\d+)", payload, re.IGNORECASE)
         if m:
             return self._resp(payload, db_error=int(m.group(1)) > self.orig_columns)
@@ -81,6 +92,11 @@ class DiscoversDVWASchema(unittest.TestCase):
         self.assertEqual(result.extracted[0]["username"], "admin")
         self.assertEqual(len(result.extracted), 2)
         self.assertTrue(any("tablas=" in line for line in result.trace))
+        # verificación por etapas (como un pentester real)
+        trace = "\n".join(result.trace)
+        self.assertIn("boolean-based", trace)   # confirmada por técnica independiente
+        self.assertIn("MariaDB", trace)         # DBMS detectado por fingerprint
+        self.assertIn("verificada=True", trace)  # extracción confirmada como credenciales
 
 
 class DiscoversDifferentSchema(unittest.TestCase):

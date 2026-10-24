@@ -45,7 +45,3 @@ Cada corrida del agente guarda un JSON en `results/` con tiempo, pasos, payloads
 3. Levantar DVWA (en la VM de Kali, o `docker compose up -d` en local) y ajustar `src/config.py`.
 4. Confirmar nivel **low**, luego implementar/afinar **medium** y **high**.
 5. Crear el **script de experimentos** (N corridas por nivel + promedios) para las tablas del paper.
-
-## Para retomar con Claude en la PC nueva
-
-Abre Claude Code en la carpeta de este repo y escribe: **"lee CONTINUAR.md y seguimos con el proyecto sqli-agent"**. Con eso recupero todo el contexto.
