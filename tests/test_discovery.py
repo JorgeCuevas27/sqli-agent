@@ -39,7 +39,10 @@ class FakeDB:
             return ProbeResult(cells=[[c, "2"] for c in self.schema.get(table, [])])
         # 5. reflected-column probe (numeric sentinels, no FROM)
         if "UNION SELECT" in sql and "1000" in sql and "FROM" not in sql:
-            return ProbeResult(cells=[["1000", "1001"]])
+            sents = re.findall(r"\b1\d{3}\b", sql)             # marcadores de la búsqueda de columnas
+            if len(sents) == self.orig_columns:                # solo refleja si el nº coincide
+                return ProbeResult(cells=[[sents[0], sents[1]]])
+            return ProbeResult()
         # 6. the dump: UNION ... FROM <a credential table>
         for table, rows in self.creds.items():
             if f"FROM {table}" in sql:

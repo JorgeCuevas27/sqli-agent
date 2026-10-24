@@ -66,7 +66,10 @@ class FakeTarget:
             table = bytes.fromhex(hx.group(1)).decode() if hx else ""
             return self._resp(payload, [{"first_name": c, "surname": "2"} for c in self.schema.get(table, [])])
         if "UNION SELECT" in payload and "1000" in payload and "FROM" not in payload:
-            return self._resp(payload, [{"first_name": "1000", "surname": "1001"}])
+            sents = re.findall(r"\b1\d{3}\b", payload)        # marcadores de la búsqueda de columnas
+            if len(sents) == self.orig_columns:               # solo refleja si el nº coincide
+                return self._resp(payload, [{"first_name": sents[0], "surname": sents[1]}])
+            return self._resp(payload)
         for table, rows in self.creds.items():
             if f"FROM {table}" in payload:
                 return self._resp(payload, [{"first_name": u, "surname": p} for u, p in rows])
