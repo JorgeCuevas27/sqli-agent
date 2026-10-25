@@ -1,7 +1,8 @@
-# DVWA lab, served three ways so the study can compare WAF tiers against the SAME target:
-#   - baseline : DVWA direct                 -> DVWA_URL=http://localhost
-#   - naive    : DVWA behind our regex WAF    -> DVWA_URL=http://localhost:8082  (bypassable tier)
-#   - crs      : DVWA behind ModSecurity+CRS  -> DVWA_URL=http://localhost:8081  (hard tier)
+# DVWA lab, served several ways so the study can compare WAF tiers against the SAME target:
+#   - baseline    : DVWA direct                        -> DVWA_URL=http://localhost
+#   - naive       : DVWA behind our regex WAF           -> DVWA_URL=http://localhost:8082  (bypassable)
+#   - modsec-weak : DVWA behind ModSecurity (sin CRS)   -> DVWA_URL=http://localhost:8083  (bypassable)
+#   - crs         : DVWA behind ModSecurity + OWASP CRS -> DVWA_URL=http://localhost:8081  (hard)
 #
 # Bring up:   docker-compose up -d --build   (or: docker compose up -d --build)
 # First time: open http://localhost (admin/password) -> "Create / Reset Database"
@@ -42,4 +43,21 @@ services:
       PORT: "8082"
     ports:
       - "8082:8082"        # DVWA behind our naive regex WAF (bypassable tier)
+    restart: unless-stopped
+
+  modsec-weak:
+    build: ./waf/modsec-weak
+    container_name: sqli-modsec-weak
+    depends_on:
+      - dvwa
+    environment:
+      BACKEND: "http://dvwa:80"
+      PORT: "8080"
+      SERVER_NAME: "localhost"
+      MODSEC_RULE_ENGINE: "On"
+      PARANOIA: "1"
+      ANOMALY_INBOUND: "1000"   # el CRS no bloquea por score; solo las reglas basicas propias
+      ANOMALY_OUTBOUND: "1000"
+    ports:
+      - "8083:8080"        # DVWA behind a weak ModSecurity (no CRS enforcement) — bypassable
     restart: unless-stopped
