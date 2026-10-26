@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import statistics
 import time
 from pathlib import Path
 
@@ -62,9 +61,11 @@ def main() -> None:
         for level in levels:
             for i in range(1, args.runs + 1):
                 done += 1
-                console.print(f"[dim]({done}/{total}) {scen} · {level} · corrida {i}/{args.runs}...[/dim]")
                 res = run_one(url, level)
                 rows.append({"scenario": scen, "level": level, "run": i, **res})
+                verdict = "SUCCESS" if res["success"] else (f"ERROR({res['error']})" if res["error"] else "FAILED")
+                console.print(f"({done}/{total}) {scen:<12}{level:<8}run {i:<2} -> "
+                              f"{verdict:<10} time={res['time']}s steps={res['steps']}")
 
     _RESULTS.mkdir(exist_ok=True)
     out = _RESULTS / f"experiments_{int(time.time())}.csv"
@@ -73,18 +74,11 @@ def main() -> None:
         writer.writeheader()
         writer.writerows(rows)
 
-    # tabla resumen: tasa de éxito + tiempo/pasos promedio (solo de corridas exitosas)
-    console.rule("Resumen — tasa de éxito y time-to-exploit")
-    console.print(f"[bold]{'escenario':<14}{'nivel':<8}{'éxito':<8}{'t medio(s)':<12}{'pasos medio':<12}[/bold]")
-    for scen in scenarios:
-        for level in levels:
-            cell = [r for r in rows if r["scenario"] == scen and r["level"] == level]
-            ok = [r for r in cell if r["success"]]
-            rate = f"{len(ok)}/{len(cell)}"
-            tmean = f"{statistics.mean([r['time'] for r in ok]):.2f}" if ok else "—"
-            smean = f"{statistics.mean([r['steps'] for r in ok]):.1f}" if ok else "—"
-            console.print(f"{scen:<14}{level:<8}{rate:<8}{tmean:<12}{smean:<12}")
-    console.print(f"\n[dim]CSV guardado en: {out}[/dim]")
+    console.rule("Listo")
+    console.print(f"{len(rows)} corridas INDIVIDUALES guardadas (sin promediar) en:")
+    console.print(f"[bold]{out}[/bold]")
+    console.print("[dim]Columnas: scenario, level, run, success(1/0), time(s), steps, error — "
+                  "el promedio lo calculas tú.[/dim]")
 
 
 if __name__ == "__main__":
