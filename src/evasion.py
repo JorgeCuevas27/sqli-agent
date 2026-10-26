@@ -20,6 +20,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from .knowledge import bypass_ladder as _kb_ladder
+
 # SQL keywords the transforms are allowed to touch. Matched as whole words, case-insensitively.
 _KEYWORDS = (
     "UNION", "SELECT", "ALL", "FROM", "WHERE", "AND", "OR", "ORDER", "BY",
@@ -196,8 +198,12 @@ class EvasionEngine:
       * `next_payload` returns (payload, pipeline) or (None, None) when the ladder is exhausted.
     """
 
-    def __init__(self, ladder: tuple[Pipeline, ...] = LADDER) -> None:
-        self.ladder = ladder
+    def __init__(self, ladder: Optional[tuple[Pipeline, ...]] = None) -> None:
+        # La escalera se ALIMENTA del dataset (knowledge/bypass_ladder); si falta o trae un
+        # transform inválido, se filtra y se cae a la LADDER determinista por defecto.
+        source = ladder if ladder is not None else _kb_ladder()
+        valid = tuple(tuple(p) for p in source if all(n in TRANSFORMS for n in p))
+        self.ladder = valid or LADDER
         self.profile = WafProfile()
 
     def next_payload(self, base: str) -> tuple[Optional[str], Optional[Pipeline]]:

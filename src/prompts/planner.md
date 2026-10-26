@@ -10,5 +10,7 @@ The agent will carry out this standard UNION-based discovery against a MySQL bac
 5. Enumerate the columns of the most promising table.
 6. Extract the username and password columns.
 
+The `available_techniques` field lists the extraction techniques available in the agent's knowledge base (e.g. union, boolean-blind, time-based, error-based). Prefer UNION when columns are reflected; otherwise fall back to a blind technique.
+
 Respond ONLY with JSON of this exact shape, nothing else:
 {"strategy": "<one or two sentences describing this UNION-based discovery plan for a MySQL target, WITHOUT naming any specific table or column>"}

