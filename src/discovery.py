@@ -92,6 +92,10 @@ class SchemaDiscovery:
 
     def discover(self) -> DiscoveryResult:
         res = DiscoveryResult()
+        cs = knowledge.corpus_size()
+        if cs:
+            self._log(res, f"base de conocimiento: {cs} payloads reales cargados "
+                           f"(PayloadsAllTheThings) + plantillas por técnica")
         baseline = self.probe("1")  # respuesta normal (sin inyección), para el test diferencial
 
         # 1. Contexto de comillas + nº de columnas + columnas reflejadas, por BÚSQUEDA UNION.

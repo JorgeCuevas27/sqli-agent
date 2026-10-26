@@ -37,6 +37,13 @@ class KnowledgeBase(unittest.TestCase):
         self.assertTrue(bp)
         self.assertTrue(all("payload" in e for e in bp))
 
+    def test_real_corpus_loaded(self):
+        # corpus real descargado de PayloadsAllTheThings (cientos de payloads, por tecnica)
+        c = knowledge.corpus()
+        self.assertGreater(knowledge.corpus_size(), 100)
+        self.assertIn("union", c)
+        self.assertTrue(c["union"])
+
     def test_corrupt_dataset_falls_back(self):
         # si el archivo no existe, bypass_ladder usa el respaldo determinista (no revienta)
         import src.knowledge as k

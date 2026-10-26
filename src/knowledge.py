@@ -66,3 +66,43 @@ def fill(template: str, **fields: str) -> str:
     for key, value in fields.items():
         out = out.replace("{" + key + "}", str(value))
     return out
+
+
+# --- Corpus REAL descargado (PayloadsAllTheThings), categorizado por nombre de archivo ---
+
+_CORPUS = _DATASETS / "corpus"
+_CATEGORY = {
+    "Generic_UnionSelect": "union",
+    "Generic_ErrorBased": "error-based",
+    "Generic_TimeBased": "time-based",
+    "Generic_Fuzz": "detection",
+    "SQLi_Polyglots": "detection",
+    "patt_auth_bypass": "boolean-blind",
+    "Auth_Bypass": "boolean-blind",
+    "Auth_Bypass2": "boolean-blind",
+    "FUZZDB_MYSQL": "mysql",
+}
+
+
+def corpus() -> dict[str, list[str]]:
+    """Carga el corpus real de payloads (datasets/corpus/*.txt), agrupado por técnica."""
+    out: dict[str, list[str]] = {}
+    if not _CORPUS.is_dir():
+        return out
+    for path in sorted(_CORPUS.glob("*.txt")):
+        category = _CATEGORY.get(path.stem, "other")
+        try:
+            lines = [ln.strip() for ln in path.read_text(encoding="utf-8", errors="ignore").splitlines() if ln.strip()]
+        except Exception:
+            lines = []
+        out.setdefault(category, []).extend(lines)
+    return out
+
+
+def corpus_size() -> int:
+    return sum(len(v) for v in corpus().values())
+
+
+def detection_payloads(limit: int = 6) -> list[str]:
+    """Payloads reales de detección de inyección (fuzz/polyglots) del corpus."""
+    return corpus().get("detection", [])[:limit]
