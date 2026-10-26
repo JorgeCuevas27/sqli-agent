@@ -1,8 +1,9 @@
-# DVWA lab, served several ways so the study can compare WAF tiers against the SAME target:
-#   - baseline    : DVWA direct                        -> DVWA_URL=http://localhost
-#   - naive       : DVWA behind our regex WAF           -> DVWA_URL=http://localhost:8082  (bypassable)
-#   - modsec-weak : DVWA behind ModSecurity (sin CRS)   -> DVWA_URL=http://localhost:8083  (bypassable)
-#   - crs         : DVWA behind ModSecurity + OWASP CRS -> DVWA_URL=http://localhost:8081  (hard)
+# DVWA lab, served several ways so the study can compare WAF tiers against the SAME target.
+# Todos los WAFs son reconocidos (aparecen en la literatura):
+#   - baseline    : DVWA direct                        -> DVWA_URL=http://localhost       (sin WAF)
+#   - modsec-weak : DVWA tras ModSecurity (sin CRS)     -> DVWA_URL=http://localhost:8083  (evadible)
+#   - naxsi       : DVWA tras NAXSI (nginx)             -> DVWA_URL=http://localhost:8084
+#   - crs         : DVWA tras ModSecurity + OWASP CRS   -> DVWA_URL=http://localhost:8081  (duro)
 #
 # Bring up:   docker-compose up -d --build   (or: docker compose up -d --build)
 # First time: open http://localhost (admin/password) -> "Create / Reset Database"
@@ -33,16 +34,13 @@ services:
       - "8081:8080"        # DVWA behind the CRS WAF
     restart: unless-stopped
 
-  naive-waf:
-    build: ./waf
-    container_name: sqli-naive-waf
+  naxsi:
+    build: ./waf/naxsi
+    container_name: sqli-naxsi
     depends_on:
       - dvwa
-    environment:
-      BACKEND: "http://dvwa:80"
-      PORT: "8082"
     ports:
-      - "8082:8082"        # DVWA behind our naive regex WAF (bypassable tier)
+      - "8084:8080"        # DVWA behind NAXSI (nginx WAF, scoring-based)
     restart: unless-stopped
 
   modsec-weak:

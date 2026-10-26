@@ -36,8 +36,8 @@ Abre `http://localhost` → login **admin** / **password** → botón **Create /
 | Escenario | URL para atacar | Dificultad |
 |---|---|---|
 | Sin WAF | http://localhost | ninguna |
-| WAF naive (regex propio) | http://localhost:8082 | baja (se evade con comentarios) |
 | ModSecurity sin CRS | http://localhost:8083 | baja (se evade con comentarios) |
+| NAXSI (nginx) | http://localhost:8084 | media (WAF por scoring) |
 | ModSecurity + OWASP CRS | http://localhost:8081 | alta (libinjection) |
 
 Para cada escenario, haz la inyección SQL **manualmente** (navegador o Burp Suite) contra esa URL.
@@ -50,10 +50,12 @@ y ataca. El nivel se guarda en la sesión del navegador.
 ## 6. Qué esperar
 
 - **Sin WAF**: los payloads clásicos funcionan directo (`1' UNION SELECT user,password FROM users-- -`).
-- **WAF naive** y **ModSecurity sin CRS**: bloquean el SQLi plano, pero se **evaden con comentarios**
+- **ModSecurity sin CRS**: bloquea el SQLi plano, pero se **evade con comentarios**
   (`1'/**/UNION/**/SELECT/**/user,password/**/FROM/**/users-- -`) o `UNION ALL`.
+- **NAXSI**: WAF por scoring (suma puntos por tokens sospechosos); bloquea el SQLi plano y es
+  resistente a los comentarios (que suman puntaje). Escenario intermedio.
 - **ModSecurity + CRS**: bloquea casi todo (comentarios y mayúsculas no sirven contra libinjection);
-  es el escenario más difícil.
+  el escenario más difícil.
 
 ## 7. Medición (línea base humana)
 
