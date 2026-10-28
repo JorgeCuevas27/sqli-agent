@@ -1,8 +1,7 @@
 {
-  "_about": "Base de conocimiento SQLi del agente. El agente se ALIMENTA de estas plantillas/recetas y a la vez GENERA sus payloads rellenandolas con el esquema que descubre. Fuente: curado de PayloadsAllTheThings (SQL Injection) y SecLists, para uso educativo/investigacion.",
+  "_about": "Plantillas de tecnicas de extraccion SQLi (sintaxis MySQL estandar) y escalera de evasion de WAF. El agente las rellena con el esquema que descubre en vivo ({q},{ucol},{pcol},{table},{i},{ch},{n}); no estan afinadas a ningun objetivo. Los payloads reales viven en datasets/corpus (PayloadsAllTheThings) y las wordlists en datasets/wordlists (sqlmap).",
   "_sources": [
-    "https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/SQL%20Injection",
-    "https://github.com/danielmiessler/SecLists/tree/master/Fuzzing/SQLi"
+    "Sintaxis estandar MySQL (extractvalue/updatexml error-based, substring boolean/time-based), documentada en PayloadsAllTheThings: https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/SQL%20Injection"
   ],
   "extraction_techniques": {
     "union": [

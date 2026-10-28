@@ -54,6 +54,41 @@ class KnowledgeBase(unittest.TestCase):
         finally:
             k._DATASETS = orig
 
+    def test_sqlmap_wordlists_loaded(self):
+        # wordlists reales de sqlmap: miles de nombres, con los de credencial presentes
+        cols, tables = knowledge.common_columns(), knowledge.common_tables()
+        self.assertGreater(len(cols), 1000)
+        self.assertGreater(len(tables), 1000)
+        lc = {c.lower() for c in cols}
+        self.assertIn("password", lc)
+        self.assertIn("username", lc)
+        self.assertIn("users", {t.lower() for t in tables})
+        # el encabezado de comentario de sqlmap no debe colarse como dato
+        self.assertFalse(any(c.startswith("#") for c in cols))
+
+    def test_credential_candidates_prioritized(self):
+        user_c, pass_c = knowledge.credential_column_candidates()
+        self.assertTrue(user_c and pass_c)
+        # las coincidencias exactas van primero -> el caso común se resuelve en pocos sondeos
+        self.assertIn("user", [c.lower() for c in user_c[:30]])
+        self.assertIn("password", [c.lower() for c in pass_c[:30]])
+
+    def test_credential_candidates_fallback(self):
+        # sin wordlist disponible, cae a la lista mínima (no revienta)
+        import src.knowledge as k
+        orig = k._WORDLISTS
+        try:
+            k._WORDLISTS = k._WORDLISTS / "no-existe"
+            user_c, pass_c = k.credential_column_candidates()
+            self.assertIn("user", user_c)
+            self.assertIn("password", pass_c)
+        finally:
+            k._WORDLISTS = orig
+
+    def test_detection_payloads_available(self):
+        # payloads de deteccion reales (corpus) o respaldo clasico, nunca vacio
+        self.assertTrue(knowledge.detection_payloads())
+
 
 if __name__ == "__main__":
     unittest.main()
