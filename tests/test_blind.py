@@ -40,6 +40,25 @@ class BlindExtraction(unittest.TestCase):
         row = BlindExtractor(fake_oracle, quote="").dump_first_row()
         self.assertEqual(row, {"username": "admin", "hash": "secret42"})
 
+    def test_uses_provided_candidates(self):
+        # los candidatos vienen de fuera (Analyst+sqlmap); el extractor los usa en vez del respaldo
+        row_db = {"acct": "root", "secret_hash": "deadbeef"}
+
+        def oracle(payload):
+            if "1=1" in payload:
+                return True
+            if "1=2" in payload:
+                return False
+            import re
+            m = re.search(r"(\w+) LIKE 0x([0-9a-f]+)", payload, re.IGNORECASE)
+            if not m:
+                return False
+            col, pat = m.group(1), bytes.fromhex(m.group(2)).decode().rstrip("%")
+            return col in row_db and row_db[col].startswith(pat)
+
+        bx = BlindExtractor(oracle, quote="", user_cols=("acct",), pass_cols=("secret_hash",))
+        self.assertEqual(bx.dump_first_row(), {"username": "root", "hash": "deadbeef"})
+
 
 if __name__ == "__main__":
     unittest.main()

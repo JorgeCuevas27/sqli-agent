@@ -102,6 +102,37 @@ class DiscoversDVWASchema(unittest.TestCase):
         self.assertIn("verificada=True", trace)  # extracción confirmada como credenciales
 
 
+class CredentialCandidatesFromLLM(unittest.TestCase):
+    """En la ruta ciega, el Analyst (LLM) propone los nombres y se aterrizan en la wordlist de
+    sqlmap: los que existen en sqlmap van primero; si el LLM no responde, respaldo determinista."""
+
+    class _GuessLLM:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def chat(self, system, user, **_kw):
+            if "username_columns" in system:   # prompt analyst_columns.md
+                return self.payload
+            return "{}"
+
+    def _orch(self, payload):
+        return Orchestrator(self._GuessLLM(payload), FakeTarget({}, {}))
+
+    def test_llm_names_grounded_in_sqlmap(self):
+        o = self._orch(json.dumps({"username_columns": ["user", "zzz_fake_col"],
+                                    "password_columns": ["password", "qqq_fake"]}))
+        users, passwords = o._credential_candidates(lambda _m: None)
+        # nombres reales (en sqlmap) primero; los inventados quedan detrás, no se pierden
+        self.assertEqual(users[0], "user")
+        self.assertEqual(passwords[0], "password")
+        self.assertLess(users.index("user"), users.index("zzz_fake_col"))
+
+    def test_fallback_when_llm_empty(self):
+        o = self._orch("{}")   # el LLM no propone nada
+        users, passwords = o._credential_candidates(lambda _m: None)
+        self.assertTrue(users and passwords)   # respaldo determinista (wordlist sqlmap)
+
+
 class DiscoversDifferentSchema(unittest.TestCase):
     """Sin 'users', sin 'user', sin 'password': debe descubrirlo igual (respaldo heurístico)."""
 

