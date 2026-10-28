@@ -58,12 +58,19 @@ def main() -> None:
     console.print(f"[dim]target={CONFIG.dvwa_url}  model={CONFIG.ollama_model}[/dim]")
 
     orchestrator = Orchestrator(OllamaClient(), DVWAClient())
-    result = orchestrator.run(
-        level=args.level,
-        max_steps=args.max_steps,
-        timeout_seconds=args.timeout,
-        log=lambda msg: console.print(msg),
-    )
+    try:
+        result = orchestrator.run(
+            level=args.level,
+            max_steps=args.max_steps,
+            timeout_seconds=args.timeout,
+            log=lambda msg: console.print(msg),
+        )
+    except Exception as exc:  # red caída, WAF que no responde, Ollama caído: sale limpio, sin traza
+        console.rule("Result")
+        console.print(f"[red]ABORTED[/red]  level={args.level}  ({type(exc).__name__}: {exc})")
+        console.print("[dim]Revisa que el contenedor del objetivo y Ollama estén arriba y "
+                      "respondiendo, y reintenta.[/dim]")
+        raise SystemExit(1)
 
     console.rule("Result")
     verdict = "[green]SUCCESS[/green]" if result.success else "[red]FAILED[/red]"

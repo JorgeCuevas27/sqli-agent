@@ -5,6 +5,7 @@ Handles the per-level mechanics of the SQL Injection page so the agents can reas
 payloads without caring how the request is shaped."""
 from __future__ import annotations
 
+import time
 from urllib.parse import urlparse
 
 import requests
@@ -12,6 +13,9 @@ from bs4 import BeautifulSoup
 
 from .config import CONFIG
 from .types import SqliResponse
+
+_RETRIES = 4          # un timeout/hiccup puntual del WAF no debe tumbar la corrida
+_TIMEOUT = 20         # segundos por intento
 
 _SQL_ERROR_MARKERS = (
     "error in your sql syntax",
@@ -45,14 +49,28 @@ class DVWAClient:
         self.password = password
         self.session = requests.Session()
 
+    def _send(self, method: str, url: str, **kwargs) -> requests.Response:
+        """Hace la petición con reintentos: ante un timeout/corte de red transitorio (típico del
+        contenedor WAF bajo muchas peticiones de la extracción ciega) reintenta en vez de reventar."""
+        kwargs.setdefault("timeout", _TIMEOUT)
+        last: Exception | None = None
+        for attempt in range(_RETRIES):
+            try:
+                return self.session.request(method, url, **kwargs)
+            except requests.exceptions.RequestException as exc:
+                last = exc
+                time.sleep(0.4 * (attempt + 1))
+        raise RuntimeError(f"sin respuesta de {url} tras {_RETRIES} intentos ({last})")
+
     def _user_token(self, path: str) -> str:
-        html = self.session.get(f"{self.base}{path}", timeout=30).text
+        html = self._send("GET", f"{self.base}{path}").text
         field = BeautifulSoup(html, "html.parser").find("input", {"name": "user_token"})
         return field["value"] if field else ""
 
     def login(self) -> bool:
         token = self._user_token("/login.php")
-        resp = self.session.post(
+        resp = self._send(
+            "POST",
             f"{self.base}/login.php",
             data={
                 "username": self.user,
@@ -60,7 +78,6 @@ class DVWAClient:
                 "Login": "Login",
                 "user_token": token,
             },
-            timeout=30,
             allow_redirects=True,
         )
         # DVWA redirects to index.php on success and back to login.php on failure.
@@ -68,10 +85,10 @@ class DVWAClient:
 
     def set_security(self, level: str) -> None:
         token = self._user_token("/security.php")
-        self.session.post(
+        self._send(
+            "POST",
             f"{self.base}/security.php",
             data={"security": level, "seclev_submit": "Submit", "user_token": token},
-            timeout=30,
         )
         host = urlparse(self.base).hostname or "localhost"
         self.session.cookies.set("security", level, domain=host)
@@ -82,20 +99,20 @@ class DVWAClient:
         blocked_before = False
         if level == "high":
             # The id is read from a session variable set on a separate page, then shown on GET.
-            post = self.session.post(
+            post = self._send(
+                "POST",
                 f"{self.base}{path}session-input.php",
                 data={"id": payload, "Submit": "Submit"},
-                timeout=30,
             )
             blocked_before = self._is_blocked(post)
-            resp = self.session.get(f"{self.base}{path}", timeout=30)
+            resp = self._send("GET", f"{self.base}{path}")
         elif level == "medium":
-            resp = self.session.post(
-                f"{self.base}{path}", data={"id": payload, "Submit": "Submit"}, timeout=30
+            resp = self._send(
+                "POST", f"{self.base}{path}", data={"id": payload, "Submit": "Submit"}
             )
         else:  # low
-            resp = self.session.get(
-                f"{self.base}{path}", params={"id": payload, "Submit": "Submit"}, timeout=30
+            resp = self._send(
+                "GET", f"{self.base}{path}", params={"id": payload, "Submit": "Submit"}
             )
         result = self._parse(payload, resp)
         if blocked_before:  # the WAF stopped the session-input POST that carries the payload
