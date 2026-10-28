@@ -31,6 +31,26 @@ Contexto numérico (DVWA medium) para evitar la comilla `'` (que NAXSI puntúa).
 information_schema, así que el nombre de columna se prueba con `AND <col> LIKE 0x25` (si da fila,
 la columna existe).
 
+## NAXSI: la evasión depende del CONTEXTO de inyección (hallazgo con evidencia)
+Medido en vivo contra NAXSI :8084 nivel low (contexto cadena `WHERE user_id='$id'`):
+```
+PASA   200  '1'            <- numérico, sin comilla
+BLOCK  403  "1'"           <- la comilla SOLA ya se bloquea
+BLOCK  403  "1' AND 1=1-- -"
+BLOCK  403  "1'='1"  / "1' OR '1'='1" / "1'||'1'='1"
+```
+NAXSI puntúa la comilla `'` por encima de su umbral, y en contexto de cadena la comilla es
+OBLIGATORIA para inyectar → low y high son un TECHO para SQLi (ni el agente ni un humano pasan;
+no hay forma estándar en MySQL de romper la cadena sin `'`; %27 se normaliza, `"` no rompe `'`).
+En contexto NUMÉRICO (medium) no hace falta comilla → boolean-blind SÍ evade. Resultado para el
+paper: **la efectividad de NAXSI depende del contexto** (numérico evadible, cadena infranqueable).
+
+| NAXSI | contexto | agente |
+|---|---|---|
+| low | cadena (`'`) | ❌ techo (comilla bloqueada) |
+| medium | numérico | ✅ bypass boolean-blind |
+| high | cadena (`'`) | ❌ techo (esperado, mismo bloqueo) |
+
 ## Validado end-to-end (NAXSI vencido por el agente completo)
 El fallback boolean-blind (`src/blind.py`, enganchado en el orquestador) ya corre dentro del agente:
 contra NAXSI :8084 medium, UNION da 403 → el agente confirma inyección booleana → extrae con LIKE
