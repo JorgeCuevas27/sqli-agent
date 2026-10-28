@@ -59,11 +59,6 @@ def technique_names() -> list[str]:
     return list(extraction_techniques().keys())
 
 
-def bypass_payloads() -> list[dict[str, str]]:
-    """Payloads de evasión de WAF conocidos (munición adicional del dataset)."""
-    return _load("waf_bypass_payloads.json").get("bypass_payloads", [])
-
-
 def fill(template: str, **fields: str) -> str:
     """Rellena una plantilla del dataset con el esquema descubierto, p. ej.
     fill("-1{q} UNION SELECT {ucol},{pcol} FROM {table}-- -", q="'", ucol="user", pcol="password", table="users")."""

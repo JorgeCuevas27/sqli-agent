@@ -1,6 +1,5 @@
 """Common base for the three agents: each loads its system prompt from `src/prompts/`
-and talks to the shared Ollama client. Mirrors PentAGI's model of one editable prompt
-template per agent role."""
+and talks to the shared Ollama client — one editable prompt template per agent role."""
 from __future__ import annotations
 
 from pathlib import Path

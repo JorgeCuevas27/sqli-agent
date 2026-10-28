@@ -25,7 +25,7 @@ La primera vez descarga las imágenes y construye los WAFs (unos minutos). Verif
 sudo docker-compose ps
 ```
 
-Deben aparecer como `Up`: `sqli-dvwa`, `sqli-naive-waf`, `sqli-modsec-weak`, `sqli-waf`.
+Deben aparecer como `Up`: `sqli-dvwa`, `sqli-modsec-weak`, `sqli-naxsi`, `sqli-waf`.
 
 ## 3. Inicializar DVWA (una sola vez)
 

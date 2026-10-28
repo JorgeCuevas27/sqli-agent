@@ -32,11 +32,6 @@ class KnowledgeBase(unittest.TestCase):
                              q="'", ucol="user", pcol="password", table="users")
         self.assertEqual(out, "-1' UNION SELECT user,password FROM users-- -")
 
-    def test_bypass_payloads_dataset(self):
-        bp = knowledge.bypass_payloads()
-        self.assertTrue(bp)
-        self.assertTrue(all("payload" in e for e in bp))
-
     def test_real_corpus_loaded(self):
         # corpus real descargado de PayloadsAllTheThings (cientos de payloads, por tecnica)
         c = knowledge.corpus()
