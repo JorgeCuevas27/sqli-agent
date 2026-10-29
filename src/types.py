@@ -38,3 +38,4 @@ class RunResult:
     attempts: list[Attempt] = field(default_factory=list)
     trace: list[str] = field(default_factory=list)  # rastro del descubrimiento de esquema
     waf_profile: dict[str, Any] = field(default_factory=dict)  # what the run learned about the WAF
+    payloads: list[dict[str, Any]] = field(default_factory=list)  # cada payload enviado + su estado

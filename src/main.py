@@ -31,6 +31,7 @@ def _result_to_dict(result: RunResult) -> dict:
         "waf_profile": result.waf_profile,
         "discovery_trace": result.trace,
         "extracted": result.extracted,
+        "payloads": result.payloads,
         "attempts": [
             {
                 "step": a.step,
@@ -44,6 +45,37 @@ def _result_to_dict(result: RunResult) -> dict:
             for a in result.attempts
         ],
     }
+
+
+def _write_payloads_txt(path: Path, result: RunResult, target: str) -> None:
+    """Exporta un .txt legible con los payloads de la corrida, para pruebas manuales (Burp)."""
+    passed, blocked, seen_p, seen_b = [], [], set(), set()
+    for e in result.payloads:
+        p = e["payload"]
+        if e["blocked"]:
+            if p not in seen_b:
+                seen_b.add(p); blocked.append(e)
+        elif p not in seen_p:
+            seen_p.add(p); passed.append(e)
+
+    L = ["=" * 64,
+         "SQLi-Agent — payloads de la corrida (para pruebas manuales)",
+         f"Nivel: {result.level}   Objetivo: {target}   "
+         f"Resultado: {'SUCCESS' if result.success else 'FAILED'}",
+         f"Enviados: {len(result.payloads)}   distintos que PASARON el WAF: {len(passed)}   "
+         f"distintos BLOQUEADOS: {len(blocked)}",
+         "=" * 64, "",
+         "### PAYLOADS QUE PASARON EL WAF (pruébalos aquí) ###"]
+    L += [e["payload"] for e in passed[:80]]
+    if len(passed) > 80:
+        L.append(f"... (+{len(passed) - 80} más; el log completo está en el JSON)")
+    L += ["", "### PAYLOADS BLOQUEADOS POR EL WAF (muestra) ###"]
+    L += [f"[HTTP {e['http_status']}] {e['payload']}" for e in blocked[:30]]
+    if len(blocked) > 30:
+        L.append(f"... (+{len(blocked) - 30} más)")
+    L += ["", "### CREDENCIALES EXTRAÍDAS ###"]
+    L += [str(c) for c in result.extracted] or ["(ninguna)"]
+    path.write_text("\n".join(L), encoding="utf-8")
 
 
 def main() -> None:
@@ -81,9 +113,14 @@ def main() -> None:
             console.print(f"  - {cred}")
 
     _RESULTS_DIR.mkdir(exist_ok=True)
-    out = _RESULTS_DIR / f"run_{args.level}_{int(time.time())}.json"
+    stamp = int(time.time())
+    out = _RESULTS_DIR / f"run_{args.level}_{stamp}.json"
     out.write_text(json.dumps(_result_to_dict(result), indent=2), encoding="utf-8")
     console.print(f"[dim]saved {out}[/dim]")
+
+    payloads_txt = _RESULTS_DIR / f"payloads_{args.level}_{stamp}.txt"
+    _write_payloads_txt(payloads_txt, result, CONFIG.dvwa_url)
+    console.print(f"[dim]payloads para pruebas manuales -> {payloads_txt}[/dim]")
 
 
 if __name__ == "__main__":
