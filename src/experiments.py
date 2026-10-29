@@ -33,13 +33,20 @@ SCENARIOS = {
 _RESULTS = Path(__file__).resolve().parent.parent / "results"
 
 
+_EMPTY_METRICS = {"llm_calls": 0, "tokens": 0, "infer_s": 0.0, "tok_s": 0.0, "vram_mb": 0.0}
+
+
 def run_one(url: str, level: str) -> dict:
     orch = Orchestrator(OllamaClient(), DVWAClient(base_url=url))
     try:
         r = orch.run(level=level, max_steps=CONFIG.max_steps, timeout_seconds=CONFIG.timeout_seconds)
-        return {"success": int(r.success), "time": r.elapsed_seconds, "steps": r.steps_used, "error": ""}
+        m = r.slm_metrics or {}
+        return {"success": int(r.success), "time": r.elapsed_seconds, "steps": r.steps_used,
+                "llm_calls": m.get("llm_calls", 0), "tokens": m.get("total_tokens", 0),
+                "infer_s": m.get("llm_infer_s", 0.0), "tok_s": m.get("tokens_per_s", 0.0),
+                "vram_mb": m.get("model_vram_mb", 0.0), "error": ""}
     except Exception as exc:  # p. ej. login bloqueado por el WAF
-        return {"success": 0, "time": 0.0, "steps": 0, "error": str(exc)[:80]}
+        return {"success": 0, "time": 0.0, "steps": 0, **_EMPTY_METRICS, "error": str(exc)[:80]}
 
 
 def main() -> None:
@@ -70,15 +77,16 @@ def main() -> None:
     _RESULTS.mkdir(exist_ok=True)
     out = _RESULTS / f"experiments_{int(time.time())}.csv"
     with out.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["scenario", "level", "run", "success", "time", "steps", "error"])
+        writer = csv.DictWriter(fh, fieldnames=["scenario", "level", "run", "success", "time", "steps",
+                                                "llm_calls", "tokens", "infer_s", "tok_s", "vram_mb", "error"])
         writer.writeheader()
         writer.writerows(rows)
 
     console.rule("Listo")
     console.print(f"{len(rows)} corridas INDIVIDUALES guardadas (sin promediar) en:")
     console.print(f"[bold]{out}[/bold]")
-    console.print("[dim]Columnas: scenario, level, run, success(1/0), time(s), steps, error — "
-                  "el promedio lo calculas tú.[/dim]")
+    console.print("[dim]Columnas: scenario, level, run, success(1/0), time(s), steps, llm_calls, "
+                  "tokens, infer_s (inferencia SLM), tok_s (tokens/s), vram_mb (GPU), error.[/dim]")
 
 
 if __name__ == "__main__":

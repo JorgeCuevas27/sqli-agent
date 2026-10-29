@@ -31,6 +31,7 @@ def _result_to_dict(result: RunResult) -> dict:
         "waf_profile": result.waf_profile,
         "discovery_trace": result.trace,
         "extracted": result.extracted,
+        "slm_metrics": result.slm_metrics,
         "payloads": result.payloads,
         "attempts": [
             {
@@ -107,6 +108,11 @@ def main() -> None:
     console.rule("Result")
     verdict = "[green]SUCCESS[/green]" if result.success else "[red]FAILED[/red]"
     console.print(f"{verdict}  level={result.level}  time={result.elapsed_seconds}s  steps={result.steps_used}")
+    m = result.slm_metrics
+    if m:
+        console.print(f"[dim]SLM: {m['llm_calls']} llamadas, {m['total_tokens']} tokens, "
+                      f"{m['llm_infer_s']}s inferencia ({m['tokens_per_s']} tok/s), "
+                      f"VRAM {m['model_vram_mb']} MB[/dim]")
     if result.extracted:
         console.print("Extracted credentials:")
         for cred in result.extracted:

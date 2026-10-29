@@ -2,3 +2,5 @@ requests>=2.32
 beautifulsoup4>=4.12
 python-dotenv>=1.0
 rich>=13.7
+sqlglot>=25.0          # validacion sintactica de los payloads generados
+# pymysql>=1.1         # opcional: validacion dinamica (ejecutar payloads contra MySQL)

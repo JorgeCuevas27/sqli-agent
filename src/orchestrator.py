@@ -37,6 +37,7 @@ def _valid_dump(crafted: dict, table: str, cred_columns: tuple[str, str]) -> boo
 class Orchestrator:
     def __init__(self, llm: OllamaClient, dvwa: DVWAClient) -> None:
         self.dvwa = dvwa
+        self.llm = llm   # compartido por los 3 agentes; de aquí salen las métricas de costo del SLM
         self.planner = Planner("Planner", "planner.md", llm)
         self.executor = Executor("Executor", "executor.md", llm)
         self.analyst = Analyst("Analyst", "analyst.md", llm)
@@ -136,6 +137,7 @@ class Orchestrator:
             trace=res.trace,
             waf_profile=engine.profile.summary(),
             payloads=payload_log,
+            slm_metrics=self.llm.metrics() if hasattr(self.llm, "metrics") else {},
         )
 
     def _blind_fallback(self, engine, level, deadline, counter, say, payload_log):

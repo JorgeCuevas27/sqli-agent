@@ -39,3 +39,4 @@ class RunResult:
     trace: list[str] = field(default_factory=list)  # rastro del descubrimiento de esquema
     waf_profile: dict[str, Any] = field(default_factory=dict)  # what the run learned about the WAF
     payloads: list[dict[str, Any]] = field(default_factory=list)  # cada payload enviado + su estado
+    slm_metrics: dict[str, Any] = field(default_factory=dict)      # costo-eficiencia del SLM
