@@ -3,7 +3,6 @@
 #   - baseline    : DVWA direct                        -> DVWA_URL=http://localhost       (sin WAF)
 #   - modsec-weak : DVWA tras ModSecurity (sin CRS)     -> DVWA_URL=http://localhost:8083  (evadible)
 #   - naxsi       : DVWA tras NAXSI (nginx)             -> DVWA_URL=http://localhost:8084
-#   - crs         : DVWA tras ModSecurity + OWASP CRS   -> DVWA_URL=http://localhost:8081  (duro)
 #
 # Bring up:   docker-compose up -d --build   (or: docker compose up -d --build)
 # First time: open http://localhost (admin/password) -> "Create / Reset Database"
@@ -15,23 +14,6 @@ services:
     container_name: sqli-dvwa
     ports:
       - "80:80"            # baseline, no WAF
-    restart: unless-stopped
-
-  waf:
-    image: owasp/modsecurity-crs:apache
-    container_name: sqli-waf
-    depends_on:
-      - dvwa
-    environment:
-      BACKEND: "http://dvwa:80"      # proxy upstream = the DVWA container (resolved by service name)
-      PORT: "8080"                   # port ModSecurity listens on inside the container
-      SERVER_NAME: "localhost"
-      MODSEC_RULE_ENGINE: "On"       # On = block; DetectionOnly = log but allow
-      PARANOIA: "1"                  # CRS paranoia level 1..4 (raise to make evasion harder)
-      ANOMALY_INBOUND: "5"
-      ANOMALY_OUTBOUND: "4"
-    ports:
-      - "8081:8080"        # DVWA behind the CRS WAF
     restart: unless-stopped
 
   naxsi:

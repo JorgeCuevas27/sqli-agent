@@ -27,7 +27,6 @@ SCENARIOS = {
     "sin-waf": "http://localhost",
     "modsec-weak": "http://localhost:8083",
     "naxsi": "http://localhost:8084",
-    "crs": "http://localhost:8081",
 }
 
 _RESULTS = Path(__file__).resolve().parent.parent / "results"

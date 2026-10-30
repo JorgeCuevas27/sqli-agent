@@ -31,7 +31,7 @@ _SQL_ERROR_MARKERS = (
     "sqlstate",
 )
 
-# When DVWA sits behind a WAF (ModSecurity + OWASP CRS) a blocked request never reaches the
+# When DVWA sits behind a WAF (ModSecurity or NAXSI) a blocked request never reaches the
 # database: the proxy answers with one of these statuses, often with a recognisable body.
 _BLOCK_STATUS = (403, 406, 501)
 _WAF_MARKERS = ("mod_security", "modsecurity", "not acceptable", "access denied")

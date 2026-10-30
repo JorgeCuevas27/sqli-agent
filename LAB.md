@@ -25,20 +25,19 @@ La primera vez descarga las imágenes y construye los WAFs (unos minutos). Verif
 sudo docker-compose ps
 ```
 
-Deben aparecer como `Up`: `sqli-dvwa`, `sqli-modsec-weak`, `sqli-naxsi`, `sqli-waf`.
+Deben aparecer como `Up`: `sqli-dvwa`, `sqli-modsec-weak`, `sqli-naxsi`.
 
 ## 3. Inicializar DVWA (una sola vez)
 
 Abre `http://localhost` → login **admin** / **password** → botón **Create / Reset Database**.
 
-## 4. Los 4 escenarios (mismo DVWA, distinto WAF)
+## 4. Los 3 escenarios (mismo DVWA, distinto WAF)
 
 | Escenario | URL para atacar | Dificultad |
 |---|---|---|
 | Sin WAF | http://localhost | ninguna |
 | ModSecurity sin CRS | http://localhost:8083 | baja (se evade con comentarios) |
 | NAXSI (nginx) | http://localhost:8084 | media (WAF por scoring) |
-| ModSecurity + OWASP CRS | http://localhost:8081 | alta (libinjection) |
 
 Para cada escenario, haz la inyección SQL **manualmente** (navegador o Burp Suite) contra esa URL.
 
@@ -53,9 +52,8 @@ y ataca. El nivel se guarda en la sesión del navegador.
 - **ModSecurity sin CRS**: bloquea el SQLi plano, pero se **evade con comentarios**
   (`1'/**/UNION/**/SELECT/**/user,password/**/FROM/**/users-- -`) o `UNION ALL`.
 - **NAXSI**: WAF por scoring (suma puntos por tokens sospechosos); bloquea el SQLi plano y es
-  resistente a los comentarios (que suman puntaje). Escenario intermedio.
-- **ModSecurity + CRS**: bloquea casi todo (comentarios y mayúsculas no sirven contra libinjection);
-  el escenario más difícil.
+  resistente a los comentarios (que suman puntaje). En contexto de cadena puntúa la comilla, así
+  que es el más resistente.
 
 ## 7. Medición (línea base humana)
 

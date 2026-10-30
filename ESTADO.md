@@ -17,7 +17,6 @@ mismo y evade WAFs. Mide time-to-exploit para comparar con un pentester humano.
 | sin-waf | :80 | — | ✅ 10/10 (low/med/high), ~1.1–1.3s |
 | modsec-weak | :8083 | ModSecurity sin CRS (firmas) | ✅ 10/10, ~1.3–1.6s |
 | naxsi | :8084 | NAXSI (scoring) | ✅ vencido con boolean-blind (LIKE) — ver abajo |
-| crs | :8081 | ModSecurity + OWASP CRS (libinjection) | ❌ techo (consistente con la literatura) |
 
 ## HALLAZGO CLAVE — NAXSI es evadible con boolean-blind (probado empíricamente)
 NAXSI bloquea `UNION`/`SELECT`/`substring`/`ascii`/`length`/`information_schema`, pero **DEJA PASAR**:

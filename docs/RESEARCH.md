@@ -39,7 +39,7 @@ A fully **local / offline** multi-agent SQLi **exploitation** system that:
 5. **A reproducible tiered-WAF benchmark** with *time-to-exploit* as the primary metric.
 
 Honest framing: even cloud GPT-4o bypasses rule-based WAFs only 0–5.7% (RADAGAS). So a local agent
-failing CRS is *consistent with SOTA*; succeeding on weaker rule-/signature-based WAFs shows the mechanism works, and
+hitting a ceiling on the strongest rule-based WAFs (e.g. NAXSI in string context) is *consistent with SOTA*; succeeding on weaker signature-based WAFs shows the mechanism works, and
 the interesting question is **how close a local small model gets to cloud results, per WAF tier.**
 
 ## 3. Architecture
@@ -91,7 +91,7 @@ paper artifact.
 ## 6. Evaluation
 
 - **Targets:** DVWA (baseline), SQLi-Labs (graded benchmark), a generic HTTP param.
-- **WAF tiers:** none / ModSecurity sin CRS (weak, signature) / NAXSI (scoring) / ModSecurity + OWASP CRS.
+- **WAF tiers:** none / ModSecurity sin CRS (weak, signature) / NAXSI (scoring).
 - **DVWA levels:** low / medium / high.
 - **Metrics:** success rate, **time-to-exploit** (vs ~10 min human baseline), steps, and the
   bypassing transform per (WAF, success).
@@ -100,7 +100,7 @@ paper artifact.
 
 ## 7. Status / build order
 
-- [x] WAF harness (ModSecurity + CRS in front of DVWA) — confirmed CRS blocks plain SQLi (403).
+- [x] WAF harness en frente de DVWA (ModSecurity débil + NAXSI).
 - [x] Evasion grammar + WAF profile (`src/evasion.py`) + unit tests.
 - [x] EvasionEngine wired into the orchestrator (content/surface decoupling) + flow tests.
 - [x] Weak-WAF tiers: ModSecurity sin CRS + NAXSI (`waf/`) — bypass validado en vivo.
