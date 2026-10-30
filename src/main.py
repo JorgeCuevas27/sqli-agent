@@ -124,9 +124,8 @@ def main() -> None:
     out.write_text(json.dumps(_result_to_dict(result), indent=2), encoding="utf-8")
     console.print(f"[dim]saved {out}[/dim]")
 
-    payloads_txt = _RESULTS_DIR / f"payloads_{args.level}_{stamp}.txt"
-    _write_payloads_txt(payloads_txt, result, CONFIG.dvwa_url)
-    console.print(f"[dim]payloads para pruebas manuales -> {payloads_txt}[/dim]")
+    # Se genera el .txt de payloads para pruebas manuales, pero sin anunciarlo en el output.
+    _write_payloads_txt(_RESULTS_DIR / f"payloads_{args.level}_{stamp}.txt", result, CONFIG.dvwa_url)
 
 
 if __name__ == "__main__":
