@@ -59,6 +59,14 @@ class Orchestrator:
         self.dvwa.set_security(level)
         say(f"[Orchestrator] login ok, nivel de seguridad '{level}'")
 
+        # Reconoce el punto de inyección leyendo el formulario de la página (parámetro + método HTTP),
+        # en vez de asumirlos.
+        inj_trace: list[str] = []
+        if hasattr(self.dvwa, "detect_injection_point"):
+            ip = self.dvwa.detect_injection_point(level)
+            say(f"[Recon] punto de inyección: parámetro {ip['param']!r} (método HTTP {ip['method']})")
+            inj_trace = [f"punto de inyección: parámetro {ip['param']} (método {ip['method']})"]
+
         engine = EvasionEngine()            # motor del ATAQUE
         recon_engine = EvasionEngine()      # motor del RECONOCIMIENTO (aparte, no gasta pasos del ataque)
         counter = {"steps": 0}
@@ -165,7 +173,7 @@ class Orchestrator:
             steps_used=counter["steps"] + recon_counter["steps"],
             extracted=extracted,
             strategy=strategy,
-            trace=trace,
+            trace=inj_trace + trace,
             waf_profile=engine.profile.summary(),
             payloads=payload_log,
             slm_metrics=self.llm.metrics() if hasattr(self.llm, "metrics") else {},

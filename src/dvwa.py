@@ -48,6 +48,7 @@ class DVWAClient:
         self.user = user
         self.password = password
         self.session = requests.Session()
+        self._injection: dict | None = None   # punto de inyección detectado (parámetro + método)
 
     def _send(self, method: str, url: str, **kwargs) -> requests.Response:
         """Hace la petición con reintentos: ante un timeout/corte de red transitorio (típico del
@@ -93,26 +94,53 @@ class DVWAClient:
         host = urlparse(self.base).hostname or "localhost"
         self.session.cookies.set("security", level, domain=host)
 
+    def detect_injection_point(self, level: str) -> dict:
+        """RECONOCE el punto de inyección leyendo el formulario de la propia página (el parámetro y
+        el método HTTP), en vez de asumirlos. Así el método no está codificado por nivel: se lee del
+        atributo `method` del <form> y el parámetro del nombre del campo. El resultado se cachea."""
+        path = "/vulnerabilities/sqli/"
+        info = {"param": "id", "method": "GET", "fields": ["id"]}
+        try:
+            html = self._send("GET", f"{self.base}{path}").text
+            form = BeautifulSoup(html, "html.parser").find("form")
+            fields = []
+            method = "GET"
+            if form:
+                method = (form.get("method") or "GET").strip().upper()
+                for tag in form.find_all(["input", "select", "textarea"]):
+                    name = tag.get("name")
+                    if name and name.lower() != "submit":
+                        fields.append(name)
+            if fields:
+                info = {"param": fields[0], "method": method, "fields": fields}
+            elif "session-input" in html:   # DVWA high: el id se envía en una página aparte
+                info = {"param": "id", "method": "SESSION", "fields": ["id"]}
+        except Exception:
+            pass
+        self._injection = info
+        return info
+
     def run_sqli(self, payload: str, level: str) -> SqliResponse:
-        level = level.lower()
+        info = self._injection or self.detect_injection_point(level)
+        param, method = info["param"], info["method"]
         path = "/vulnerabilities/sqli/"
         blocked_before = False
-        if level == "high":
-            # The id is read from a session variable set on a separate page, then shown on GET.
+        if method == "SESSION":
+            # El id se lee de una variable de sesión fijada en otra página, y se muestra por GET.
             post = self._send(
                 "POST",
                 f"{self.base}{path}session-input.php",
-                data={"id": payload, "Submit": "Submit"},
+                data={param: payload, "Submit": "Submit"},
             )
             blocked_before = self._is_blocked(post)
             resp = self._send("GET", f"{self.base}{path}")
-        elif level == "medium":
+        elif method == "POST":
             resp = self._send(
-                "POST", f"{self.base}{path}", data={"id": payload, "Submit": "Submit"}
+                "POST", f"{self.base}{path}", data={param: payload, "Submit": "Submit"}
             )
-        else:  # low
+        else:  # GET
             resp = self._send(
-                "GET", f"{self.base}{path}", params={"id": payload, "Submit": "Submit"}
+                "GET", f"{self.base}{path}", params={param: payload, "Submit": "Submit"}
             )
         result = self._parse(payload, resp)
         if blocked_before:  # the WAF stopped the session-input POST that carries the payload
