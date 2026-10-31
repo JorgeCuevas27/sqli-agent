@@ -75,20 +75,28 @@ class Orchestrator:
 
         def _probe(base_sql: str, eng: EvasionEngine, cnt: dict, budget: int) -> ProbeResult:
             # Envío consciente del WAF: escala disfraces hasta que uno pasa (o se agota la escalera).
+            # El bloqueo se resume en UNA línea por sondeo (no una por cada intento), para no inundar.
+            blocked = 0
             while True:
                 if cnt["steps"] >= budget or time.monotonic() > deadline:
+                    if blocked:
+                        say(f"[WAF] bloqueó {blocked} intento(s) de evasión")
                     return ProbeResult(blocked=True)
                 payload, pipeline = eng.next_payload(base_sql)
                 if payload is None:
+                    if blocked:
+                        say(f"[WAF] bloqueó {blocked} intento(s) de evasión")
                     return ProbeResult(blocked=True)
                 cnt["steps"] += 1
                 resp = self.dvwa.run_sqli(payload, level)
                 payload_log.append({"payload": payload, "phase": "ataque",
                                     "blocked": resp.blocked, "http_status": resp.http_status})
                 if resp.blocked:
-                    say(f"[WAF] bloqueó (HTTP {resp.http_status}) — escalando evasión")
+                    blocked += 1
                     eng.record(pipeline, payload, blocked=True)
                     continue
+                if blocked:
+                    say(f"[WAF] bloqueó {blocked} intento(s); la evasión pasó al intento {blocked + 1}")
                 eng.record(pipeline, payload, blocked=False)
                 cells = [[r.get("first_name", ""), r.get("surname", "")] for r in resp.rows]
                 return ProbeResult(cells=cells, db_error=resp.db_error, blocked=False)
