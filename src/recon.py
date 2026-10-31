@@ -43,10 +43,13 @@ class TechniqueSelector:
 
     def select(self) -> Recon:
         r = Recon()
-        r.signals["union"] = self._union_viable()
+        # Primero las señales BARATAS y decisivas (boolean/error/time), que cuando pasan cuestan
+        # pocos sondeos; el UNION va al final porque, ante un WAF que lo bloquea, escalar la evasión
+        # consume muchos sondeos y no debe agotar el presupuesto antes de probar el booleano.
         r.signals["boolean"] = self._boolean_viable(r)
         r.signals["error"] = self._error_visible()
         r.signals["time"] = self._time_delay(r.quote) if self.time_probe else None
+        r.signals["union"] = self._union_viable()
         r.injectable = any(bool(v) for v in r.signals.values())
         # Prioridad de ataque entre las técnicas implementadas (datos directos primero).
         r.technique = ("union" if r.signals["union"]

@@ -23,7 +23,7 @@ from .recon import TechniqueSelector
 from .types import RunResult
 
 Logger = Optional[Callable[[str], None]]
-_RECON_BUDGET = 60   # sondeos del reconocimiento (presupuesto propio, no gasta los pasos del ataque)
+_RECON_BUDGET = 90   # sondeos del reconocimiento (presupuesto propio, no gasta los pasos del ataque)
 
 
 def _valid_dump(crafted: dict, table: str, cred_columns: tuple[str, str]) -> bool:
