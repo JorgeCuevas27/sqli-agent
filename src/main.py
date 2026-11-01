@@ -1,8 +1,3 @@
-"""CLI entry point: run one SQLi attack against a DVWA level and record the result.
-
-    python -m src.main --level low
-
-Operates ONLY against the local DVWA configured in config.py."""
 from __future__ import annotations
 
 import argparse
@@ -49,7 +44,6 @@ def _result_to_dict(result: RunResult) -> dict:
 
 
 def _write_payloads_txt(path: Path, result: RunResult, target: str) -> None:
-    """Exporta un .txt legible con los payloads de la corrida, para pruebas manuales (Burp)."""
     passed, blocked, seen_p, seen_b = [], [], set(), set()
     for e in result.payloads:
         p = e["payload"]
@@ -98,7 +92,7 @@ def main() -> None:
             timeout_seconds=args.timeout,
             log=lambda msg: console.print(msg),
         )
-    except Exception as exc:  # red caída, WAF que no responde, Ollama caído: sale limpio, sin traza
+    except Exception as exc:
         console.rule("Result")
         console.print(f"[red]ABORTED[/red]  level={args.level}  ({type(exc).__name__}: {exc})")
         console.print("[dim]Revisa que el contenedor del objetivo y Ollama estén arriba y "
@@ -124,7 +118,6 @@ def main() -> None:
     out.write_text(json.dumps(_result_to_dict(result), indent=2), encoding="utf-8")
     console.print(f"[dim]saved {out}[/dim]")
 
-    # Se genera el .txt de payloads para pruebas manuales, pero sin anunciarlo en el output.
     _write_payloads_txt(_RESULTS_DIR / f"payloads_{args.level}_{stamp}.txt", result, CONFIG.dvwa_url)
 
 

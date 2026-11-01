@@ -1,5 +1,3 @@
-"""Extracción boolean-blind (LIKE) — la técnica que vence a NAXSI. Probada con un oráculo falso
-que simula una fila usuario/contraseña, respondiendo a los LIKE como lo haría la base de datos."""
 from __future__ import annotations
 
 import re
@@ -41,7 +39,6 @@ class BlindExtraction(unittest.TestCase):
         self.assertEqual(row, {"username": "admin", "hash": "secret42"})
 
     def test_uses_provided_candidates(self):
-        # los candidatos vienen de fuera (Analyst+sqlmap); el extractor los usa en vez del respaldo
         row_db = {"acct": "root", "secret_hash": "deadbeef"}
 
         def oracle(payload):

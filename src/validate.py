@@ -1,17 +1,3 @@
-"""Valida los payloads que GENERÓ el agente, SIN pasar por el WAF.
-
-Responde la pregunta del jurado: "¿cómo validas que el agente genera payloads CORRECTOS?" —
-independiente de si tuvieron éxito o evadieron el WAF. Dos niveles:
-
-  1. Sintáctico (estático, sqlglot): reconstruye la consulta vulnerable de DVWA con el payload
-     inyectado y la parsea en dialecto MySQL. Mide el % de payloads que son SQL válido.
-  2. Dinámico (opcional, --db): ejecuta la consulta reconstruida contra un MySQL real y comprueba
-     que corre sin error. Requiere acceso a la BD (variables DB_HOST/DB_PORT/DB_USER/DB_PASS/DB_NAME).
-
-Uso:
-    python -m src.validate results/run_medium_1793....json
-    python -m src.validate results/run_medium_1793....json --db --save
-"""
 from __future__ import annotations
 
 import argparse
@@ -22,15 +8,13 @@ from typing import Optional
 
 
 def reconstruct(payload: str, level: str) -> str:
-    """Mete el payload en la consulta vulnerable de DVWA, según el contexto del nivel."""
     base = "SELECT first_name, surname FROM users WHERE user_id = "
-    if level in ("low", "high"):     # contexto de cadena (entre comillas)
+    if level in ("low", "high"):
         return base + f"'{payload}'"
-    return base + f"{payload}"       # medium: contexto numérico (sin comillas)
+    return base + f"{payload}"
 
 
 def static_valid(query: str) -> bool:
-    """True si la consulta reconstruida parsea como SQL de MySQL (sqlglot)."""
     import sqlglot
     try:
         sqlglot.parse_one(query, read="mysql")
@@ -52,7 +36,7 @@ def _distinct_payloads(data: dict) -> list[str]:
 
 def _db_conn():
     try:
-        import pymysql  # type: ignore
+        import pymysql
     except ImportError:
         print("pymysql no instalado (pip install pymysql) — se omite la validación dinámica")
         return None
@@ -71,7 +55,6 @@ def _db_conn():
 
 
 def _dynamic_valid(conn, query: str) -> bool:
-    """True si la consulta se ejecuta en MySQL sin error de sintaxis (solo lectura)."""
     try:
         with conn.cursor() as cur:
             cur.execute(query)

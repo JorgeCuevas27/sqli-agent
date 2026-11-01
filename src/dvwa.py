@@ -1,8 +1,3 @@
-"""DVWA client — the deterministic tool the Executor drives.
-
-Targets ONLY a local DVWA instance (a deliberately vulnerable app used for research).
-Handles the per-level mechanics of the SQL Injection page so the agents can reason about
-payloads without caring how the request is shaped."""
 from __future__ import annotations
 
 import time
@@ -14,8 +9,8 @@ from bs4 import BeautifulSoup
 from .config import CONFIG
 from .types import SqliResponse
 
-_RETRIES = 4          # un timeout/hiccup puntual del WAF no debe tumbar la corrida
-_TIMEOUT = 20         # segundos por intento
+_RETRIES = 4
+_TIMEOUT = 20
 
 _SQL_ERROR_MARKERS = (
     "error in your sql syntax",
@@ -31,8 +26,6 @@ _SQL_ERROR_MARKERS = (
     "sqlstate",
 )
 
-# When DVWA sits behind a WAF (ModSecurity or NAXSI) a blocked request never reaches the
-# database: the proxy answers with one of these statuses, often with a recognisable body.
 _BLOCK_STATUS = (403, 406, 501)
 _WAF_MARKERS = ("mod_security", "modsecurity", "not acceptable", "access denied")
 
@@ -48,11 +41,9 @@ class DVWAClient:
         self.user = user
         self.password = password
         self.session = requests.Session()
-        self._injection: dict | None = None   # punto de inyección detectado (parámetro + método)
+        self._injection: dict | None = None
 
     def _send(self, method: str, url: str, **kwargs) -> requests.Response:
-        """Hace la petición con reintentos: ante un timeout/corte de red transitorio (típico del
-        contenedor WAF bajo muchas peticiones de la extracción ciega) reintenta en vez de reventar."""
         kwargs.setdefault("timeout", _TIMEOUT)
         last: Exception | None = None
         for attempt in range(_RETRIES):
@@ -81,7 +72,6 @@ class DVWAClient:
             },
             allow_redirects=True,
         )
-        # DVWA redirects to index.php on success and back to login.php on failure.
         return "login.php" not in resp.url
 
     def set_security(self, level: str) -> None:
@@ -95,9 +85,6 @@ class DVWAClient:
         self.session.cookies.set("security", level, domain=host)
 
     def detect_injection_point(self, level: str) -> dict:
-        """RECONOCE el punto de inyección leyendo el formulario de la propia página (el parámetro y
-        el método HTTP), en vez de asumirlos. Así el método no está codificado por nivel: se lee del
-        atributo `method` del <form> y el parámetro del nombre del campo. El resultado se cachea."""
         path = "/vulnerabilities/sqli/"
         info = {"param": "id", "method": "GET", "fields": ["id"]}
         try:
@@ -113,7 +100,7 @@ class DVWAClient:
                         fields.append(name)
             if fields:
                 info = {"param": fields[0], "method": method, "fields": fields}
-            elif "session-input" in html:   # DVWA high: el id se envía en una página aparte
+            elif "session-input" in html:
                 info = {"param": "id", "method": "SESSION", "fields": ["id"]}
         except Exception:
             pass
@@ -126,7 +113,6 @@ class DVWAClient:
         path = "/vulnerabilities/sqli/"
         blocked_before = False
         if method == "SESSION":
-            # El id se lee de una variable de sesión fijada en otra página, y se muestra por GET.
             post = self._send(
                 "POST",
                 f"{self.base}{path}session-input.php",
@@ -138,12 +124,12 @@ class DVWAClient:
             resp = self._send(
                 "POST", f"{self.base}{path}", data={param: payload, "Submit": "Submit"}
             )
-        else:  # GET
+        else:
             resp = self._send(
                 "GET", f"{self.base}{path}", params={param: payload, "Submit": "Submit"}
             )
         result = self._parse(payload, resp)
-        if blocked_before:  # the WAF stopped the session-input POST that carries the payload
+        if blocked_before:
             result.blocked = True
         return result
 

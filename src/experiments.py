@@ -1,13 +1,3 @@
-"""Runner de experimentos para el paper.
-
-Corre el agente N veces por cada {escenario × nivel}, mide el time-to-exploit y la tasa de éxito,
-guarda un CSV con cada corrida e imprime una tabla resumen (promedios) lista para las tablas.
-
-Uso (en Kali, con Ollama corriendo en Windows):
-    OLLAMA_URL=http://192.168.56.1:11434 python -m src.experiments --runs 5
-    OLLAMA_URL=http://192.168.56.1:11434 python -m src.experiments --runs 10 --levels low,medium \\
-        --scenarios sin-waf,modsec-weak
-"""
 from __future__ import annotations
 
 import argparse
@@ -22,7 +12,6 @@ from .dvwa import DVWAClient
 from .llm import OllamaClient
 from .orchestrator import Orchestrator
 
-# escenario -> URL del DVWA detrás de ese WAF (puertos del docker-compose)
 SCENARIOS = {
     "sin-waf": "http://localhost",
     "modsec-weak": "http://localhost:8083",
@@ -44,7 +33,7 @@ def run_one(url: str, level: str) -> dict:
                 "llm_calls": m.get("llm_calls", 0), "tokens": m.get("total_tokens", 0),
                 "infer_s": m.get("llm_infer_s", 0.0), "tok_s": m.get("tokens_per_s", 0.0),
                 "vram_mb": m.get("model_vram_mb", 0.0), "error": ""}
-    except Exception as exc:  # p. ej. login bloqueado por el WAF
+    except Exception as exc:
         return {"success": 0, "time": 0.0, "steps": 0, **_EMPTY_METRICS, "error": str(exc)[:80]}
 
 

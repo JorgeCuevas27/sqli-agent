@@ -1,5 +1,3 @@
-"""El reconocimiento elige la técnica por OBSERVACIÓN (árbol OWASP WSTG), no por el nombre del WAF.
-Un probe falso simula cada caso (refleja / solo booleano / todo bloqueado / solo retardo)."""
 from __future__ import annotations
 
 import unittest
@@ -12,7 +10,7 @@ class TechniqueSelection(unittest.TestCase):
     def test_union_when_reflects(self):
         def probe(sql):
             if "UNION SELECT" in sql:
-                return ProbeResult(cells=[["1000", "1001"]])   # el UNION pasa y refleja
+                return ProbeResult(cells=[["1000", "1001"]])
             if "AND 1=1" in sql:
                 return ProbeResult(cells=[["a", "b"]])
             if "AND 1=2" in sql:
@@ -27,13 +25,13 @@ class TechniqueSelection(unittest.TestCase):
     def test_boolean_when_union_blocked(self):
         def probe(sql):
             if "UNION SELECT" in sql:
-                return ProbeResult(blocked=True)               # WAF bloquea UNION
+                return ProbeResult(blocked=True)
             if "AND 1=1" in sql:
                 return ProbeResult(cells=[["a", "b"]])
             if "AND 1=2" in sql:
                 return ProbeResult()
             if sql == "1'":
-                return ProbeResult(blocked=True)               # comilla bloqueada (no error visible)
+                return ProbeResult(blocked=True)
             return ProbeResult()
         r = TechniqueSelector(probe).select()
         self.assertFalse(r.signals["union"])
@@ -46,17 +44,17 @@ class TechniqueSelection(unittest.TestCase):
         self.assertFalse(r.injectable)
 
     def test_detects_time_based(self):
-        probe = lambda sql: ProbeResult(blocked=True)          # nada observable por UNION/boolean/error
+        probe = lambda sql: ProbeResult(blocked=True)
         time_probe = lambda sql: 2.0 if "SLEEP" in sql else 0.0
         r = TechniqueSelector(probe, time_probe).select()
-        self.assertTrue(r.signals["time"])                     # se DETECTA el time-based
+        self.assertTrue(r.signals["time"])
         self.assertTrue(r.injectable)
-        self.assertEqual(r.technique, "none")                  # detectada, pero sin extractor -> no atacable
+        self.assertEqual(r.technique, "none")
 
     def test_detects_error_based(self):
         def probe(sql):
             if sql == "1'":
-                return ProbeResult(db_error=True)              # error visible
+                return ProbeResult(db_error=True)
             return ProbeResult(blocked=True)
         r = TechniqueSelector(probe).select()
         self.assertTrue(r.signals["error"])

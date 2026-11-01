@@ -1,4 +1,3 @@
-"""Planner: plantea la metodología y conoce las técnicas disponibles del dataset."""
 from __future__ import annotations
 
 import json
@@ -14,7 +13,7 @@ class Planner(Agent):
         request = {
             "dvwa_security_level": level,
             "feedback_from_previous_attempts": feedback or "none",
-            "available_techniques": knowledge.technique_names(),  # del dataset (union, boolean, time, error)
+            "available_techniques": knowledge.technique_names(),
             "goal": "Discover the schema and extract the stored credentials via SQL injection.",
         }
         raw = self.llm.chat(self.system, json.dumps(request), json_mode=True, temperature=0.3)

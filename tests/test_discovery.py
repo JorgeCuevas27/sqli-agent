@@ -1,7 +1,3 @@
-"""Schema discovery must FIND the table/columns from the database's own answers, not assume them.
-
-A tiny in-memory fake database answers the discovery probes. Two different schemas are tested to
-prove the agent is NOT hardcoded to `users(user,password)`."""
 from __future__ import annotations
 
 import re
@@ -11,9 +7,6 @@ from src.discovery import ProbeResult, SchemaDiscovery
 
 
 class FakeDB:
-    """Answers the base injections the way a MySQL-backed app (2 displayed columns) would.
-
-    schema: {table_name: [column, ...]}; creds: {table_name: [(user_value, pass_value), ...]}."""
 
     def __init__(self, schema, creds, quote="'", orig_columns=2):
         self.schema = schema
@@ -22,28 +15,22 @@ class FakeDB:
         self.orig_columns = orig_columns
 
     def probe(self, sql: str) -> ProbeResult:
-        # 1. confirm injection: a lone quote breaks the query
         if sql == f"1{self.quote}":
             return ProbeResult(db_error=True)
-        # 2. column count via ORDER BY
         m = re.search(r"ORDER BY (\d+)", sql, re.IGNORECASE)
         if m:
             return ProbeResult(db_error=int(m.group(1)) > self.orig_columns)
-        # 3. tables enumeration
         if "information_schema.tables" in sql:
             return ProbeResult(cells=[[t, "2"] for t in self.schema])
-        # 4. columns enumeration (table name arrives hex-encoded)
         if "information_schema.columns" in sql:
             hx = re.search(r"table_name=0x([0-9a-f]+)", sql, re.IGNORECASE)
             table = bytes.fromhex(hx.group(1)).decode() if hx else ""
             return ProbeResult(cells=[[c, "2"] for c in self.schema.get(table, [])])
-        # 5. reflected-column probe (numeric sentinels, no FROM)
         if "UNION SELECT" in sql and "1000" in sql and "FROM" not in sql:
-            sents = re.findall(r"\b1\d{3}\b", sql)             # marcadores de la búsqueda de columnas
-            if len(sents) == self.orig_columns:                # solo refleja si el nº coincide
+            sents = re.findall(r"\b1\d{3}\b", sql)
+            if len(sents) == self.orig_columns:
                 return ProbeResult(cells=[[sents[0], sents[1]]])
             return ProbeResult()
-        # 6. the dump: UNION ... FROM <a credential table>
         for table, rows in self.creds.items():
             if f"FROM {table}" in sql:
                 return ProbeResult(cells=[[u, p] for u, p in rows])
@@ -75,7 +62,6 @@ class DiscoveryOnDVWALikeSchema(unittest.TestCase):
 
 
 class DiscoveryOnDifferentSchema(unittest.TestCase):
-    """No 'users', no 'user', no 'password' anywhere — discovery must still find the creds."""
 
     def setUp(self):
         self.db = FakeDB(

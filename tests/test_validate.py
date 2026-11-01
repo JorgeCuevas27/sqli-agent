@@ -1,5 +1,3 @@
-"""Valida que el VALIDADOR de payloads funciona: reconstruye la consulta de DVWA y mide si el
-payload generado es SQL sintacticamente valido (sin tocar el WAF ni la red)."""
 from __future__ import annotations
 
 import json
@@ -8,7 +6,7 @@ import unittest
 from pathlib import Path
 
 try:
-    import sqlglot  # noqa: F401
+    import sqlglot
     HAS_SQLGLOT = True
 except ImportError:
     HAS_SQLGLOT = False
@@ -44,7 +42,6 @@ class StaticValidation(unittest.TestCase):
         path.unlink()
 
     def test_broken_payload_flagged(self):
-        # comilla sin cerrar -> SQL invalido
         path = self._write({"level": "low", "payloads": [
             {"payload": "1'", "blocked": True, "http_status": 403},
         ]})

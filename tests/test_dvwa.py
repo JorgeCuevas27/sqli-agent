@@ -1,5 +1,3 @@
-"""El agente RECONOCE el punto de inyección leyendo el formulario de la página (parámetro + método
-HTTP), sin asumirlos. Se simula el HTML para no depender de la red."""
 from __future__ import annotations
 
 import unittest
@@ -14,7 +12,7 @@ class _FakeResp:
 
 def _client(html: str) -> DVWAClient:
     c = DVWAClient(base_url="http://x")
-    c._send = lambda method, url, **kw: _FakeResp(html)   # type: ignore
+    c._send = lambda method, url, **kw: _FakeResp(html)
     return c
 
 
@@ -32,7 +30,6 @@ class DetectInjectionPoint(unittest.TestCase):
         self.assertEqual(info["param"], "id")
 
     def test_detects_session_based(self):
-        # DVWA high: el id va por una página aparte; no hay campo en el formulario principal
         info = _client('<a href="session-input.php">change your id</a>').detect_injection_point("high")
         self.assertEqual(info["method"], "SESSION")
 
