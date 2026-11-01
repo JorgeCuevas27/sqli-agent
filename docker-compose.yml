@@ -1,18 +1,9 @@
-# DVWA lab, served several ways so the study can compare WAF tiers against the SAME target.
-# Todos los WAFs son reconocidos (aparecen en la literatura):
-#   - baseline    : DVWA direct                        -> DVWA_URL=http://localhost       (sin WAF)
-#   - modsec-weak : DVWA tras ModSecurity (sin CRS)     -> DVWA_URL=http://localhost:8083  (evadible)
-#   - naxsi       : DVWA tras NAXSI (nginx)             -> DVWA_URL=http://localhost:8084
-#
-# Bring up:   docker-compose up -d --build   (or: docker compose up -d --build)
-# First time: open http://localhost (admin/password) -> "Create / Reset Database"
-
 services:
   dvwa:
     image: vulnerables/web-dvwa:latest
     container_name: sqli-dvwa
     ports:
-      - "80:80"            # baseline, no WAF
+      - "80:80"
     restart: unless-stopped
 
   naxsi:
@@ -21,7 +12,7 @@ services:
     depends_on:
       - dvwa
     ports:
-      - "8084:8080"        # DVWA behind NAXSI (nginx WAF, scoring-based)
+      - "8084:8080"
     restart: unless-stopped
 
   modsec-weak:
@@ -35,8 +26,8 @@ services:
       SERVER_NAME: "localhost"
       MODSEC_RULE_ENGINE: "On"
       PARANOIA: "1"
-      ANOMALY_INBOUND: "1000"   # el CRS no bloquea por score; solo las reglas basicas propias
+      ANOMALY_INBOUND: "1000"
       ANOMALY_OUTBOUND: "1000"
     ports:
-      - "8083:8080"        # DVWA behind a weak ModSecurity (no CRS enforcement) — bypassable
+      - "8083:8080"
     restart: unless-stopped

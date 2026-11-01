@@ -1,5 +1,3 @@
-# NAXSI (WAF de nginx) como reverse-proxy a DVWA. Compila nginx + el modulo NAXSI desde el repo
-# oficial (wargio/naxsi) — no hay imagen prebuilt. Basado en el Dockerfile oficial de NAXSI.
 FROM alpine:latest AS build
 ENV NGINX_VERSION=nginx-1.28.0
 RUN apk add --no-cache openssl-dev pcre2-dev zlib-dev wget build-base git
